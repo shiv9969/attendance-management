@@ -1,4 +1,4 @@
-import os, tempfile, unittest
+import os, unittest
 os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["ADMIN_EMAIL"] = ""
@@ -7,58 +7,48 @@ import app as app_module
 
 class AttendXTests(unittest.TestCase):
     def setUp(self):
-        self.app = app_module.app
-        self.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SQLALCHEMY_DATABASE_URI="sqlite://")
-        self.client = self.app.test_client()
+        self.app=app_module.app; self.app.config.update(TESTING=True, SQLALCHEMY_DATABASE_URI="sqlite://")
+        self.client=self.app.test_client()
         with self.app.app_context():
-            app_module.db.drop_all()
-            app_module.db.create_all()
-            admin = app_module.User(name="Admin", email="admin@test.local", role="admin")
-            admin.set_password("AdminPass123")
-            teacher = app_module.User(name="Teacher", email="teacher@test.local", role="teacher")
-            teacher.set_password("TeacherPass123")
-            student = app_module.User(name="Student", email="student@test.local", role="student", roll_no="T001")
-            student.set_password("StudentPass123")
-            app_module.db.session.add_all([admin, teacher, student])
-            app_module.db.session.commit()
-            subject = app_module.Subject(name="Maths", code="M101", teacher_id=teacher.id)
-            app_module.db.session.add(subject)
-            app_module.db.session.commit()
-            app_module.db.session.add(app_module.Enrollment(student_id=student.id, subject_id=subject.id))
-            app_module.db.session.commit()
-            self.subject_id = subject.id
-            self.student_id = student.id
-            self.teacher_id = teacher.id
+            app_module.db.drop_all(); app_module.db.create_all()
+            admin=app_module.User(name="Super Admin",email="root@test.local",role="admin"); admin.set_password("RootPass123")
+            self.college=app_module.College(name="Example College",official_email="college@test.local",address="Test Road",code="ATX-ABC123",status="approved")
+            app_module.db.session.add_all([admin,self.college]); app_module.db.session.flush()
+            teacher=app_module.User(name="Teacher",email="teacher@test.local",role="teacher",college_id=self.college.id,account_status="active"); teacher.set_password("TeacherPass123")
+            app_module.db.session.add(teacher)
+            app_module.db.session.add(app_module.StudentRoster(college_id=self.college.id,student_id="S001",name="Student One",email="student@test.local",department="CS",year="2"))
+            app_module.db.session.commit(); self.college_id=self.college.id
     def tearDown(self):
+        with self.app.app_context(): app_module.db.session.remove(); app_module.db.drop_all()
+    def test_homepage_and_college_registration_form(self):
+        self.assertEqual(self.client.get("/").status_code,200)
+        self.assertEqual(self.client.get("/college/register").status_code,200)
+    def test_role_is_database_driven(self):
+        response=self.client.post("/login",data={"email":"teacher@test.local","password":"TeacherPass123","college_code":"ATX-ABC123"},follow_redirects=True)
+        self.assertEqual(response.status_code,200)
+        self.assertIn(b"Your subjects",response.data)
+    def test_wrong_college_code_denied(self):
+        response=self.client.post("/login",data={"email":"teacher@test.local","password":"TeacherPass123","college_code":"ATX-WRONG"},follow_redirects=True)
+        self.assertIn(b"Enter the approved College Code",response.data)
+    def test_student_signup_requires_roster_match_and_otp(self):
+        original=app_module.issue_otp; app_module.issue_otp=lambda *args: True
+        try:
+            response=self.client.post("/signup",data={"name":"Student One","email":"student@test.local","password":"StudentPass123","college_code":"ATX-ABC123","roll_no":"S001"},follow_redirects=True)
+            self.assertEqual(response.status_code,200)
+            self.assertIn(b"6-digit verification code",response.data)
+            with self.app.app_context(): self.assertIsNone(app_module.User.query.filter_by(email="student@test.local").first())
+        finally: app_module.issue_otp=original
+    def test_teacher_signup_is_pending_and_cannot_login(self):
+        self.client.post("/teacher/signup",data={"name":"Pending Teacher","email":"pending@test.local","password":"TeacherPass123","college_code":"ATX-ABC123"})
         with self.app.app_context():
-            app_module.db.session.remove()
-            app_module.db.drop_all()
-    def login(self, email, password, role):
-        return self.client.post("/login", data={"email":email,"password":password,"role":role}, follow_redirects=True)
-    def test_homepage(self):
-        self.assertEqual(self.client.get("/").status_code, 200)
-    def test_student_signup(self):
-        res = self.client.post("/signup", data={"name":"New Student","email":"new@test.local","password":"StrongPass123","role":"student"}, follow_redirects=True)
-        self.assertEqual(res.status_code, 200)
+            u=app_module.User.query.filter_by(email="pending@test.local").first(); self.assertIsNotNone(u); self.assertEqual(u.account_status,"pending"); self.assertFalse(u.active)
+    def test_duplicate_attendance_constraint(self):
         with self.app.app_context():
-            self.assertIsNotNone(app_module.User.query.filter_by(email="new@test.local").first())
-    def test_privileged_signup_blocked(self):
-        res = self.client.post("/signup", data={"name":"Bad Teacher","email":"bad@test.local","password":"StrongPass123","role":"teacher"}, follow_redirects=True)
-        self.assertIn(b"must be created by an administrator", res.data)
-    def test_student_dashboard_requires_login(self):
-        self.assertIn(self.client.get("/dashboard").status_code, (302, 401))
-    def test_teacher_login(self):
-        res = self.login("teacher@test.local", "TeacherPass123", "teacher")
-        self.assertEqual(res.status_code, 200)
-        self.assertIn(b"Your subjects", res.data)
-    def test_duplicate_attendance_protection_model_constraint(self):
-        with self.app.app_context():
-            sess = app_module.AttendanceSession(subject_id=self.subject_id, teacher_id=self.teacher_id,
-                token_hash="x", ends_at=app_module.utcnow()+app_module.timedelta(hours=1))
-            app_module.db.session.add(sess); app_module.db.session.commit()
-            a = app_module.Attendance(student_id=self.student_id, subject_id=self.subject_id, session_id=sess.id)
-            app_module.db.session.add(a); app_module.db.session.commit()
-            self.assertEqual(app_module.Attendance.query.filter_by(student_id=self.student_id, session_id=sess.id).count(), 1)
+            teacher=app_module.User.query.filter_by(email="teacher@test.local").first()
+            subject=app_module.Subject(name="Maths",code="M101",teacher_id=teacher.id,college_id=self.college_id); app_module.db.session.add(subject); app_module.db.session.commit()
+            sess=app_module.AttendanceSession(subject_id=subject.id,teacher_id=teacher.id,token_hash="x",ends_at=app_module.utcnow()+app_module.timedelta(hours=1)); app_module.db.session.add(sess); app_module.db.session.commit()
+            student=app_module.User(name="Student One",email="s2@test.local",password_hash="x",role="student",college_id=self.college_id,account_status="active"); app_module.db.session.add(student); app_module.db.session.commit()
+            app_module.db.session.add(app_module.Attendance(student_id=student.id,subject_id=subject.id,session_id=sess.id)); app_module.db.session.commit()
+            self.assertEqual(app_module.Attendance.query.filter_by(student_id=student.id,session_id=sess.id).count(),1)
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__=="__main__": unittest.main()
