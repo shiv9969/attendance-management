@@ -1,6 +1,36 @@
-{% extends "base.html" %}{% block title %}Log in{% endblock %}{% block content %}
-<div class="auth-layout"><div class="auth-aside"><div class="eyebrow">WELCOME BACK</div><h1>Your campus,<br><span>in sync.</span></h1><p>Sign in to access attendance, reports and your class sessions.</p><div class="mini-check">✓ One account, clear records</div><div class="mini-check">✓ Fresh QR every 20 seconds</div></div>
-<div class="form-card"><h2>Sign in</h2><p class="muted">Choose your account type to continue.</p><form method="post" class="stack"><input type="hidden" name="scan_token" value="{{ scan_token }}">
-<label>Account type<select name="role" required><option value="student">Student</option><option value="teacher">Teacher</option><option value="admin">Administrator</option></select></label>
-<label>Email address<input type="email" name="email" placeholder="you@college.edu" required autocomplete="email"></label><label>Password<input type="password" name="password" placeholder="Enter your password" required autocomplete="current-password"></label>
-<button class="btn primary full" type="submit">Sign in <span>→</span></button></form><p class="form-bottom">New student? <a href="{{ url_for('signup') }}">Create an account</a></p></div></div>{% endblock %}
+{% extends "base.html" %}{% block title %}Sign in{% endblock %}
+{% block content %}
+<section class="login-shell">
+  <div class="login-copy">
+    <div class="eyebrow"><span class="eyebrow-dot"></span> ONE PLATFORM · EVERY CAMPUS</div>
+    <h1>Your campus.<br><span>Your people.</span><br>Your progress.</h1>
+    <p class="login-lead">A calmer, smarter way to keep attendance fair, secure and easy to understand.</p>
+    <div class="login-benefits">
+      <div><span class="benefit-icon">↻</span><span><b>Fresh QR every 20 seconds</b><small>Short-lived codes help prevent replay.</small></span></div>
+      <div><span class="benefit-icon">▦</span><span><b>Campus-specific access</b><small>Accounts should belong to the right college.</small></span></div>
+      <div><span class="benefit-icon">⌁</span><span><b>Attendance at a glance</b><small>Clear records, reports and useful reminders.</small></span></div>
+    </div>
+    <div class="login-orbit orbit-one"></div><div class="login-orbit orbit-two"></div>
+  </div>
+  <div class="login-card-wrap">
+    <div class="login-card">
+      <div class="card-topline"><span class="brand-mark">A</span><span><b>Welcome back</b><small>Sign in to AttendX</small></span><span class="secure-pill">● Secure sign-in</span></div>
+      <form method="post" class="stack login-form">
+        <input type="hidden" name="scan_token" value="{{ scan_token }}">
+        <label>College Code <span class="muted">(not required for AttendX Super Admin)</span>
+          <input name="college_code" id="college-code" placeholder="ATX-XXXXXX" autocomplete="organization" />
+        </label><p class="field-hint">AttendX identifies your account type from the verified account stored in the database.</p>
+        <label>College email<input type="email" name="email" placeholder="you@college.edu" required autocomplete="email"></label>
+        <label>Password<div class="password-field"><input type="password" id="password" name="password" placeholder="Enter your password" required autocomplete="current-password"><button class="password-toggle" type="button" id="password-toggle" aria-label="Show password">Show</button></div></label>
+        <button class="btn primary full login-submit" type="submit">Continue <span>→</span></button>
+      </form>
+      <div class="login-divider"><span>NEW TO ATTENDX?</span></div>
+      <div class="join-actions"><a href="{{ url_for('signup') }}" class="join-option"><span class="join-icon">＋</span><span><b>Student account</b><small>Requires college roster verification</small></span><span class="join-arrow">↗</span></a><a href="{{ url_for('teacher_signup') }}" class="join-option"><span class="join-icon">♧</span><span><b>Teacher registration</b><small>Requires college admin approval</small></span><span class="join-arrow">↗</span></a><a href="{{ url_for('college_register') }}" class="join-option"><span class="join-icon">⌂</span><span><b>Register a college</b><small>Requests are reviewed by AttendX</small></span><span class="join-arrow">↗</span></a></div>
+      <p class="login-note">Your selected role does not grant permissions by itself.</p>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>document.getElementById('password-toggle').addEventListener('click',function(){const p=document.getElementById('password');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide';});</script>
+{% endblock %}
