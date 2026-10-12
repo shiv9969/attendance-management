@@ -5,17 +5,17 @@ can be configured in the hosting dashboard instead of committed to source contro
 """
 
 # Generate a long random value before deploying. Keep this value private.
-SECRET_KEY = "CHANGE-ME-to-a-long-random-secret-before-use"
+SECRET_KEY = "shiv"
 
 # Local testing uses SQLite. For hosting, set DATABASE_URL to your PostgreSQL URL.
-DATABASE_URL = "sqlite:///attendx.db"
+DATABASE_URL = "postgresql://neondb_owner:npg_zpfEPnlk5N2y@ep-nameless-sunset-azpqdzr2-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 # Optional initial admin account. Set both fields to create the admin on first run.
-ADMIN_EMAIL = "admin@example.edu"
-ADMIN_PASSWORD = "CHANGE-ME-to-a-strong-admin-password"
+ADMIN_EMAIL = "shivamnavinmishra5678@gmail.com"
+ADMIN_PASSWORD = "shiv"
 
 # Set True when deployed behind HTTPS; keep False for localhost.
-COOKIE_SECURE = False
+COOKIE_SECURE = True
 
 # Development only: keep False unless debugging locally.
 FLASK_DEBUG = False
