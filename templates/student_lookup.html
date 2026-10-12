@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Find students{% endblock %}{% block content %}
+<div class="page-heading"><div><div class="eyebrow">FACULTY TOOLS</div><h1>Find a student</h1><p class="muted">Search by name or registered email. Results are limited to your enrolled students.</p></div></div>
+<form method="get" class="search-bar"><input name="q" value="{{ q }}" placeholder="Search name or email…" required><button class="btn primary">Search</button></form>
+{% if q %}<div class="table-wrap"><table><thead><tr><th>Student</th><th>Email</th><th>Roll number</th><th></th></tr></thead><tbody>{% for s in students %}<tr><td><strong>{{ s.name }}</strong></td><td>{{ s.email }}</td><td>{{ s.roll_no or '—' }}</td><td><a href="{{ url_for('student_detail', student_id=s.id) }}">View report →</a></td></tr>{% else %}<tr><td colspan="4" class="empty-cell">No matching students found.</td></tr>{% endfor %}</tbody></table></div>{% endif %}{% endblock %}

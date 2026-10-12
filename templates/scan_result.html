@@ -1,0 +1,2 @@
+{% extends "base.html" %}{% block title %}Attendance result{% endblock %}{% block content %}
+<div class="result-wrap"><div class="result-icon {{ 'ok' if success else 'bad' }}">{{ '✓' if success else '!' }}</div><div class="eyebrow">{{ 'ATTENDANCE CONFIRMATION' if success else 'ATTENDANCE NOT MARKED' }}</div><h1>{{ 'You’re all set.' if success else 'We couldn’t complete that.' }}</h1><p class="lead">{{ message }}</p><a class="btn primary" href="{{ url_for('dashboard') if current_user.is_authenticated else url_for('login') }}">Continue <span>→</span></a></div>{% endblock %}

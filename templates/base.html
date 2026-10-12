@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}AttendX{% endblock %} · AttendX</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script defer src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+</head>
+<body>
+<header class="topbar"><a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">A</span> Attend<span>X</span></a>
+<nav>
+{% if current_user.is_authenticated %}
+<a href="{{ url_for('dashboard') }}">Dashboard</a>
+{% if current_user.role in ['teacher','admin'] %}<a href="{{ url_for('student_lookup') }}">Students</a><a href="{{ url_for('review_corrections') }}">Corrections</a><a href="{{ url_for('export_csv') }}">Export CSV</a>{% endif %}
+{% if current_user.role == 'admin' %}<a href="{{ url_for('admin_dashboard') }}">Admin</a>{% endif %}
+<form class="inline" method="post" action="{{ url_for('logout') }}"><button class="nav-button" type="submit">Log out</button></form>
+{% else %}<a href="{{ url_for('login') }}">Log in</a><a class="nav-cta" href="{{ url_for('signup') }}">Create account</a>{% endif %}
+</nav></header>
+<main class="container">
+{% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+{% block content %}{% endblock %}
+</main>
+<footer><span>AttendX · Attendance, made accountable.</span><span>Secure rotating QR · 20-second expiry</span></footer>
+{% block scripts %}{% endblock %}
+</body></html>
