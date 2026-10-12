@@ -1,0 +1,7 @@
+info.local.py
+.venv/
+__pycache__/
+*.pyc
+instance/
+*.db
+.DS_Store
