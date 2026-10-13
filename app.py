@@ -358,7 +358,7 @@ def dashboard():
     if current_user.role == "teacher":
         subjects = Subject.query.filter_by(teacher_id=current_user.id, college_id=current_user.college_id).all()
         return render_template("teacher_dashboard.html", subjects=subjects)
-    if current_user.role == "college_admin": return redirect(url_for("college_admin_dashboard"))
+    if current_user.role == "college_admin": return redirect(url_for("college_admin_dashboard", section="subjects"))
     return redirect(url_for("admin_dashboard"))
 
 @app.route("/teacher/subject", methods=["POST"])
@@ -573,11 +573,28 @@ def decide_college_request(req_id, decision):
     flash("College approved and code generated." if decision=="approve" else "College request rejected.","success")
     return redirect(url_for("college_requests"))
 
+def _college_page_data():
+    college = db.session.get(College, current_user.college_id)
+    users = User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(300).all()
+    roster = StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(500).all()
+    teachers = [u for u in users if u.role == "teacher"]
+    subjects = Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all()
+    return dict(college=college, users=users, teachers=teachers,
+        pending_teachers=[t for t in teachers if t.account_status == "pending"],
+        approved_teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher", account_status="active").order_by(User.name).all(),
+        roster=roster, roster_count=len(roster), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id, used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=subjects)
+
 @app.route("/college-admin")
+@app.route("/college-admin/<section>")
 @role_required("college_admin")
-def college_admin_dashboard():
-    college= db.session.get(College,current_user.college_id)
-    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(300).all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id,used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="active").order_by(User.name).all())
+def college_admin_dashboard(section="overview"):
+    allowed = {"overview", "students", "teachers", "subjects", "timetable", "reports", "settings"}
+    if section not in allowed:
+        abort(404)
+    data = _college_page_data()
+    data["section"] = section
+    template = {"overview": "college_admin.html", "students": "college_students.html", "teachers": "college_teachers.html", "subjects": "college_subjects.html", "timetable": "college_timetable.html", "reports": "college_reports.html", "settings": "college_settings.html"}[section]
+    return render_template(template, **data)
 
 @app.route("/college-admin/subjects", methods=["POST"])
 @role_required("college_admin")
@@ -590,14 +607,14 @@ def college_add_subject():
         flash("That subject code already exists in your college.","error")
     else:
         db.session.add(Subject(name=name,code=code,teacher_id=teacher.id,college_id=current_user.college_id)); db.session.commit(); log("college_subject_created",f"{code}: {name}"); flash("Subject added and assigned to teacher.","success")
-    return redirect(url_for("college_admin_dashboard"))
+    return redirect(url_for("college_admin_dashboard", section="students"))
 
 @app.route("/college-admin/roster-upload", methods=["POST"])
 @role_required("college_admin")
 def upload_roster():
     f=request.files.get("roster")
     if not f or not f.filename.lower().endswith(".csv"):
-        flash("Upload a CSV file with student_id,name,email,department,year,division columns.","error"); return redirect(url_for("college_admin_dashboard"))
+        flash("Upload a CSV file with student_id,name,email,department,year,division columns.","error"); return redirect(url_for("college_admin_dashboard", section="teachers"))
     try:
         rows=csv.DictReader(io.StringIO(f.stream.read().decode("utf-8-sig")))
         required={"student_id","name","email"}
@@ -612,7 +629,7 @@ def upload_roster():
         db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
-    return redirect(url_for("college_admin_dashboard"))
+    return redirect(url_for("college_admin_dashboard", section="teachers"))
 
 @app.route("/college-admin/teacher/<int:user_id>/<decision>", methods=["POST"])
 @role_required("college_admin")
