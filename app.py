@@ -657,8 +657,35 @@ def decide_college_request(req_id, decision):
 @app.route("/college-admin")
 @role_required("college_admin")
 def college_admin_dashboard():
-    college= db.session.get(College,current_user.college_id)
-    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(300).all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id,used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="active").order_by(User.name).all())
+    """Render the requested college workspace section using existing templates."""
+    college = db.session.get(College, current_user.college_id)
+    section = request.args.get("section", "overview").strip().lower()
+    users = User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(500).all()
+    teachers = User.query.filter_by(college_id=current_user.college_id, role="teacher").order_by(User.name).all()
+    pending_teachers = [t for t in teachers if t.account_status == "pending"]
+    roster_query = StudentRoster.query.filter_by(college_id=current_user.college_id)
+    roster_count = roster_query.count()
+    roster = roster_query.order_by(StudentRoster.name).limit(500).all()
+    teacher_codes = TeacherInvite.query.filter_by(college_id=current_user.college_id, used=False).order_by(TeacherInvite.created_at.desc()).all()
+    subjects = Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all()
+    approved_teachers = User.query.filter_by(college_id=current_user.college_id, role="teacher", account_status="active").order_by(User.name).all()
+
+    if section == "students":
+        return render_template("college_students.html", roster=roster, roster_count=roster_count)
+    if section == "teachers":
+        return render_template("college_teachers.html", teachers=teachers, pending_teachers=pending_teachers, teacher_codes=teacher_codes)
+    if section == "subjects":
+        return render_template("college_subjects.html", subjects=subjects, approved_teachers=approved_teachers)
+    if section == "timetable":
+        return render_template("college_timetable.html", subjects=subjects)
+    if section == "reports":
+        return render_template("college_reports.html", roster_count=roster_count, subjects=subjects, teachers=teachers)
+    if section == "settings":
+        return render_template("college_settings.html", college=college)
+
+    return render_template("college_admin.html", college=college, users=users,
+        pending_teachers=pending_teachers, roster_count=roster_count, roster=roster,
+        teacher_codes=teacher_codes, subjects=subjects, approved_teachers=approved_teachers)
 
 @app.route("/college-admin/subjects", methods=["POST"])
 @role_required("college_admin")
@@ -671,7 +698,7 @@ def college_add_subject():
         flash("That subject code already exists in your college.","error")
     else:
         db.session.add(Subject(name=name,code=code,teacher_id=teacher.id,college_id=current_user.college_id)); db.session.commit(); log("college_subject_created",f"{code}: {name}"); flash("Subject added and assigned to teacher.","success")
-    return redirect(url_for("college_admin_dashboard"))
+    return redirect(url_for("college_admin_dashboard", section="subjects"))
 
 @app.route("/college-admin/roster-add", methods=["POST"])
 @role_required("college_admin")
@@ -751,14 +778,14 @@ def upload_roster():
         db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
-    return redirect(url_for("college_admin_dashboard"))
+    return redirect(url_for("college_admin_dashboard", section="students"))
 
 @app.route("/college-admin/teacher/<int:user_id>/<decision>", methods=["POST"])
 @role_required("college_admin")
 def decide_teacher(user_id, decision):
     if decision not in ("approve","reject"): abort(400)
     teacher=User.query.filter_by(id=user_id,college_id=current_user.college_id,role="teacher",account_status="pending").first_or_404()
-    teacher.account_status="active" if decision=="approve" else "rejected"; teacher.active=(decision=="approve"); db.session.commit(); log("teacher_"+decision,teacher.email); flash("Teacher request updated.","success"); return redirect(url_for("college_admin_dashboard"))
+    teacher.account_status="active" if decision=="approve" else "rejected"; teacher.active=(decision=="approve"); db.session.commit(); log("teacher_"+decision,teacher.email); flash("Teacher request updated.","success"); return redirect(url_for("college_admin_dashboard", section="teachers"))
 
 @app.route("/teacher/signup", methods=["GET","POST"])
 def teacher_signup():
@@ -778,7 +805,56 @@ def generate_teacher_code():
     code=generate_unique_code("TCH")
     db.session.add(TeacherInvite(college_id=current_user.college_id,code=code)); db.session.commit()
     flash(f"New teacher registration code generated: {code}","success")
-    return redirect(url_for("college_admin_dashboard"))
+    return redirect(url_for("college_admin_dashboard", section="teachers"))
+
+@app.route("/college-admin/teacher-code/<int:invite_id>/delete", methods=["POST"])
+@role_required("college_admin")
+def delete_teacher_code(invite_id):
+    invite = TeacherInvite.query.filter_by(id=invite_id, college_id=current_user.college_id, used=False).first_or_404()
+    db.session.delete(invite)
+    db.session.commit()
+    log("teacher_invite_deleted", invite.code)
+    flash("Unused teacher invitation code deleted.", "success")
+    return redirect(url_for("college_admin_dashboard", section="teachers"))
+
+
+@app.route("/college-admin/subjects/<int:subject_id>/edit", methods=["POST"])
+@role_required("college_admin")
+def edit_college_subject(subject_id):
+    subject = Subject.query.filter_by(id=subject_id, college_id=current_user.college_id).first_or_404()
+    name = request.form.get("name", "").strip()
+    code = request.form.get("code", "").strip().upper()
+    teacher_id = request.form.get("teacher_id", type=int)
+    teacher = User.query.filter_by(id=teacher_id, college_id=current_user.college_id, role="teacher", account_status="active").first() if teacher_id else None
+    duplicate = Subject.query.filter(Subject.college_id == current_user.college_id, Subject.code == code, Subject.id != subject.id).first() if code else None
+    if not name or not code or not teacher:
+        flash("Enter a subject name, subject code and choose an approved teacher.", "error")
+    elif duplicate:
+        flash("That subject code already exists in your college.", "error")
+    else:
+        subject.name = name[:120]
+        subject.code = code[:30]
+        subject.teacher_id = teacher.id
+        db.session.commit()
+        log("college_subject_updated", f"{subject.code}: {subject.name}")
+        flash("Subject updated successfully.", "success")
+    return redirect(url_for("college_admin_dashboard", section="subjects"))
+
+
+@app.route("/college-admin/subjects/<int:subject_id>/delete", methods=["POST"])
+@role_required("college_admin")
+def delete_college_subject(subject_id):
+    subject = Subject.query.filter_by(id=subject_id, college_id=current_user.college_id).first_or_404()
+    if Enrollment.query.filter_by(subject_id=subject.id).first() or AttendanceSession.query.filter_by(subject_id=subject.id).first() or Attendance.query.filter_by(subject_id=subject.id).first():
+        flash("This subject has enrollment or attendance history and cannot be deleted safely.", "error")
+    else:
+        name, code = subject.name, subject.code
+        db.session.delete(subject)
+        db.session.commit()
+        log("college_subject_deleted", f"{code}: {name}")
+        flash("Subject deleted successfully.", "success")
+    return redirect(url_for("college_admin_dashboard", section="subjects"))
+
 
 @app.route("/college-admin/roster-codes.csv")
 @role_required("college_admin")
