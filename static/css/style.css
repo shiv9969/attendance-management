@@ -124,12 +124,12 @@ input,select,textarea{background:#fff;border-color:#dbe6f2;color:#172b4d}
 }
 
 /* Overall / individual attendance report tabs */
-.attendance-report-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0 16px;padding:5px;border:1px solid var(--line,#e5ebf4);background:var(--panel,#fff);border-radius:14px;width:fit-content;max-width:100%}
+.attendance-report-tabs{display:flex;flex-direction:row;gap:8px;flex-wrap:nowrap;align-items:center;margin:20px 0 16px;padding:5px;border:1px solid var(--line,#e5ebf4);background:var(--panel,#fff);border-radius:14px;width:fit-content;max-width:100%}
 .report-tab{border:0;background:transparent;color:var(--muted,#68758b);font:inherit;font-weight:700;font-size:14px;padding:11px 16px;border-radius:10px;cursor:pointer;min-height:42px}
 .report-tab.active{background:#2166d1;color:#fff;box-shadow:0 4px 12px rgba(33,102,209,.18)}
 .report-tab:focus-visible{outline:3px solid #9fc4ff;outline-offset:2px}
 .attendance-report-panel[hidden]{display:none!important}
-@media(max-width:480px){.attendance-report-tabs{width:100%;display:grid;grid-template-columns:1fr}.report-tab{width:100%;text-align:center}}
+@media(max-width:480px){.attendance-report-tabs{width:100%;display:grid;grid-template-columns:1fr 1fr;gap:4px}.report-tab{width:100%;text-align:center;padding:10px 7px;font-size:12px}}
 
 
 /* Student-only light sidebar with compact floating active item */
