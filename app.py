@@ -189,27 +189,53 @@ def find_session(token):
     except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
         return None
 
-def send_otp_email(email, otp):
-    """SMTP is configured in info.py. If not configured, OTP is never exposed to the public response."""
-    host = getattr(info, "SMTP_HOST", "")
-    user = getattr(info, "SMTP_USER", "")
-    password = getattr(info, "SMTP_PASSWORD", "")
-    sender = getattr(info, "SMTP_FROM", user)
-    port = int(getattr(info, "SMTP_PORT", 587))
-    if not host or not sender:
-        app.logger.error("Email OTP cannot be delivered: configure SMTP_HOST/SMTP_FROM in info.py")
+def send_email(to_email, subject, body, reply_to=None):
+    """Send transactional email using environment-overridable SMTP settings."""
+    host = os.getenv("SMTP_HOST", getattr(info, "SMTP_HOST", ""))
+    user = os.getenv("SMTP_USER", getattr(info, "SMTP_USER", ""))
+    password = os.getenv("SMTP_PASSWORD", getattr(info, "SMTP_PASSWORD", ""))
+    sender = os.getenv("SMTP_FROM", getattr(info, "SMTP_FROM", user))
+    port = int(os.getenv("SMTP_PORT", str(getattr(info, "SMTP_PORT", 587))))
+    if not host or not sender or not to_email:
+        app.logger.error("Email not sent: SMTP_HOST, SMTP_FROM, and recipient are required")
         return False
-    msg = EmailMessage(); msg["Subject"] = "Your AttendX verification code"; msg["From"] = sender; msg["To"] = email
-    msg.set_content(f"Your AttendX verification code is {otp}. It expires in 10 minutes. If you did not request it, ignore this email.")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to_email
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.set_content(body)
     try:
         with smtplib.SMTP(host, port, timeout=15) as server:
             server.starttls()
-            if user: server.login(user, password)
+            if user:
+                server.login(user, password)
             server.send_message(msg)
         return True
     except Exception:
-        app.logger.exception("Unable to send AttendX OTP")
+        app.logger.exception("Unable to send AttendX email to %s", to_email)
         return False
+
+
+def send_admin_notification(req):
+    admin_email = os.getenv("ADMIN_EMAIL", getattr(info, "ADMIN_EMAIL", "")).strip().lower()
+    if not admin_email:
+        app.logger.error("College request notification not sent: ADMIN_EMAIL is not configured")
+        return False
+    body = ("A new college registration request was submitted on AttendX.\n\n"
+            f"College: {req.college_name}\nContact: {req.contact_name}\n"
+            f"Official email: {req.official_email}\nAddress: {req.address}\n"
+            f"Submitted: {req.created_at}\n\n"
+            "Review this request in the AttendX Super Admin panel under College requests.\n"
+            "You can reply to this email to contact the configured sender inbox; replies are not processed inside AttendX.")
+    return send_email(admin_email, f"AttendX: new college request — {req.college_name}", body,
+                      reply_to=req.official_email)
+
+def send_otp_email(email, otp):
+    """Deliver signup verification OTP by SMTP."""
+    return send_email(email, "Your AttendX verification code",
+                      f"Your AttendX verification code is {otp}. It expires in 10 minutes. If you did not request it, ignore this email.")
 
 def otp_digest(email, purpose, otp):
     return hashlib.sha256(f"{app.config['SECRET_KEY']}:{email}:{purpose}:{otp}".encode()).hexdigest()
@@ -294,8 +320,21 @@ def college_register():
         if User.query.filter_by(email=email).first() or CollegeRequest.query.filter_by(official_email=email,status="pending").first() or College.query.filter_by(official_email=email).first():
             flash("A request or approved college already exists for this email.","error"); return redirect(url_for("college_register"))
         req=CollegeRequest(college_name=name,official_email=email,address=address,contact_name=contact,password_hash=generate_password_hash(password))
-        db.session.add(req); db.session.commit(); flash("College request submitted. AttendX will review it before issuing a code.","success"); return redirect(url_for("login"))
+        db.session.add(req)
+        db.session.commit()
+        # Request remains saved even if email delivery is temporarily unavailable.
+        if not send_admin_notification(req):
+            app.logger.warning("College request %s saved, but admin notification email failed", req.id)
+        return redirect(url_for("college_waiting", req_id=req.id, email=email))
     return render_template("college_register.html")
+
+@app.route("/college/waiting/<int:req_id>")
+def college_waiting(req_id):
+    email = request.args.get("email", "").strip().lower()
+    req = db.session.get(CollegeRequest, req_id)
+    if not req or not email or not secrets.compare_digest(req.official_email.lower(), email):
+        abort(404)
+    return render_template("college_waiting.html", college_request=req)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -545,13 +584,25 @@ def decide_college_request(req_id, decision):
     req=db.session.get(CollegeRequest,req_id)
     if not req or req.status!="pending": abort(404)
     req.status="approved" if decision=="approve" else "rejected"; req.reviewed_at=utcnow()
+    college = None
     if decision=="approve":
         college=College(name=req.college_name,official_email=req.official_email,address=req.address,code=generate_college_code(),status="approved")
         db.session.add(college); db.session.flush()
         admin=User(name=req.contact_name,email=req.official_email,password_hash=req.password_hash,role="college_admin",college_id=college.id,account_status="active")
         db.session.add(admin)
     db.session.commit(); log("college_request_"+decision, f"request={req_id}")
-    flash("College approved and code generated." if decision=="approve" else "College request rejected.","success")
+    if decision == "approve" and college:
+        body = (f"Hello {req.contact_name},\n\nYour AttendX college registration has been approved.\n\n"
+                f"College: {college.name}\nCollege Code: {college.code}\nLogin email: {req.official_email}\n\n"
+                "Use your chosen password and this College Code to sign in. Keep the code private and share it only with authorized users.")
+        sent = send_email(req.official_email, "AttendX college registration approved", body,
+                          reply_to=os.getenv("ADMIN_EMAIL", getattr(info, "ADMIN_EMAIL", "")))
+        flash("College approved and code generated." + (" Approval email sent." if sent else " WARNING: approval email failed; copy the code from this panel and check SMTP logs."), "success" if sent else "error")
+    elif decision == "reject":
+        send_email(req.official_email, "AttendX college registration update",
+                   f"Hello {req.contact_name},\n\nThank you for registering {req.college_name} with AttendX. Unfortunately, your request was not approved at this time. You may contact the AttendX administrator for clarification.",
+                   reply_to=os.getenv("ADMIN_EMAIL", getattr(info, "ADMIN_EMAIL", "")))
+        flash("College request rejected and notification attempted.","success")
     return redirect(url_for("college_requests"))
 
 @app.route("/college-admin")
