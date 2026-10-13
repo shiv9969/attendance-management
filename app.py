@@ -658,6 +658,22 @@ def generate_teacher_code():
     flash(f"New teacher registration code generated: {code}","success")
     return redirect(url_for("college_admin_dashboard", section="teachers"))
 
+@app.route("/college-admin/teacher-code/<int:invite_id>/delete", methods=["POST"])
+@role_required("college_admin")
+def delete_teacher_code(invite_id):
+    # Only delete unused codes belonging to this college; never affect another college
+    # or a code that has already been used for a teacher registration.
+    invite = TeacherInvite.query.filter_by(
+        id=invite_id,
+        college_id=current_user.college_id,
+        used=False,
+    ).first_or_404()
+    db.session.delete(invite)
+    db.session.commit()
+    log("teacher_invite_deleted", f"invite_id={invite_id}")
+    flash("Unused teacher invitation code deleted.", "success")
+    return redirect(url_for("college_admin_dashboard", section="teachers"))
+
 @app.route("/college-admin/roster-codes.csv")
 @role_required("college_admin")
 def export_roster_codes():
