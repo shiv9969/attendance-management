@@ -57,17 +57,24 @@
     overall: document.getElementById('overall-report-panel'),
     individual: document.getElementById('individual-report-panel')
   };
-  tabs.forEach((tab) => tab.addEventListener('click', () => {
-    const selected = tab.dataset.reportTab;
+  function selectReport(selected, updateUrl) {
     tabs.forEach((item) => {
-      const active = item === tab;
+      const active = item.dataset.reportTab === selected;
       item.classList.toggle('active', active);
       item.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     Object.entries(panels).forEach(([name, panel]) => {
       panel.hidden = name !== selected;
     });
-  }));
+    if (updateUrl) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', selected);
+      window.history.replaceState({}, '', url);
+    }
+  }
+  tabs.forEach((tab) => tab.addEventListener('click', () => selectReport(tab.dataset.reportTab, true)));
+  const requestedView = new URLSearchParams(window.location.search).get('view');
+  selectReport(requestedView === 'individual' ? 'individual' : 'overall', false);
 })();
 </script>
 {% endblock %}

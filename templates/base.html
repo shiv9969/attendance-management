@@ -16,20 +16,35 @@
 <form class="inline" method="post" action="{{ url_for('logout') }}"><button class="nav-button" type="submit">Log out</button></form>
 {% else %}<a href="{{ url_for('login') }}">Log in</a><a class="nav-cta" href="{{ url_for('create_account_options') }}">Create account</a>{% endif %}
 </nav></header>
-{% if current_user.is_authenticated and current_user.role == 'college_admin' %}
+{% if current_user.is_authenticated and current_user.role == 'student' %}
+<div class="student-shell">
+  <aside class="student-sidebar">
+    <a class="sidebar-brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">A</span><span>Attend<span class="brand-x">X</span><small>STUDENT SPACE</small></span></a>
+    <div class="sidebar-caption">MY LEARNING</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"><span>▦</span>Overview</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint == 'attendance_report' and request.args.get('view', 'overall') == 'overall' else '' }}" href="{{ url_for('attendance_report', view='overall') }}"><span>◷</span>Overall report</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint == 'attendance_report' and request.args.get('view') == 'individual' else '' }}" href="{{ url_for('attendance_report', view='individual') }}"><span>▤</span>Individual reports</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint == 'student_scan' else '' }}" href="{{ url_for('student_scan') }}"><span>▣</span>Scan class QR</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint == 'corrections' else '' }}" href="{{ url_for('corrections') }}"><span>↗</span>Request correction</a>
+    <div class="sidebar-caption sidebar-bottom-caption">ACCOUNT</div>
+    <div class="student-sidebar-note"><span class="sidebar-avatar">{{ current_user.name[:1]|upper }}</span><span><b>{{ current_user.name }}</b><small>Student</small></span></div>
+    <form class="student-sidebar-logout" method="post" action="{{ url_for('logout') }}"><button class="sidebar-link sidebar-logout-button" type="submit"><span>⇥</span>Log out</button></form>
+  </aside>
+  <div class="student-main"><main class="container student-container">
+{% elif current_user.is_authenticated and current_user.role == 'college_admin' %}
 <div class="college-shell"><aside class="college-sidebar"><a class="sidebar-brand" href="{{ url_for('college_admin_dashboard') }}"><span class="brand-mark">A</span><span>Attend<span class="brand-x">X</span><small>COLLEGE WORKSPACE</small></span></a><div class="sidebar-caption">WORKSPACE</div>
-<a class="sidebar-link {{ 'active' if request.endpoint == 'college_admin_dashboard' and request.args.get('section','overview') == 'overview' else '' }}" href="{{ url_for('college_admin_dashboard') }}"><span>▦</span>Dashboard</a>
-<a class="sidebar-link {{ 'active' if request.args.get('section') == 'students' else '' }}" href="{{ url_for('college_admin_dashboard',section='students') }}"><span>♙</span>Students</a>
-<a class="sidebar-link {{ 'active' if request.args.get('section') == 'teachers' else '' }}" href="{{ url_for('college_admin_dashboard',section='teachers') }}"><span>♧</span>Teachers</a>
-<a class="sidebar-link {{ 'active' if request.args.get('section') == 'subjects' else '' }}" href="{{ url_for('college_admin_dashboard',section='subjects') }}"><span>▤</span>Subjects</a>
-<a class="sidebar-link {{ 'active' if request.args.get('section') == 'timetable' else '' }}" href="{{ url_for('college_admin_dashboard',section='timetable') }}"><span>▦</span>Timetable</a>
-<a class="sidebar-link {{ 'active' if request.args.get('section') == 'reports' else '' }}" href="{{ url_for('college_admin_dashboard',section='reports') }}"><span>◷</span>Attendance reports</a>
-<div class="sidebar-caption sidebar-bottom-caption">SETTINGS</div><a class="sidebar-link {{ 'active' if request.args.get('section') == 'settings' else '' }}" href="{{ url_for('college_admin_dashboard',section='settings') }}"><span>⚙</span>College settings</a>
+<a class="sidebar-link {{ 'active' if request.endpoint == 'college_admin_dashboard' and request.view_args.get('section','overview') == 'overview' else '' }}" href="{{ url_for('college_admin_dashboard') }}"><span>▦</span>Dashboard</a>
+<a class="sidebar-link {{ 'active' if request.view_args.get('section') == 'students' else '' }}" href="{{ url_for('college_admin_dashboard',section='students') }}"><span>♙</span>Students</a>
+<a class="sidebar-link {{ 'active' if request.view_args.get('section') == 'teachers' else '' }}" href="{{ url_for('college_admin_dashboard',section='teachers') }}"><span>♧</span>Teachers</a>
+<a class="sidebar-link {{ 'active' if request.view_args.get('section') == 'subjects' else '' }}" href="{{ url_for('college_admin_dashboard',section='subjects') }}"><span>▤</span>Subjects</a>
+<a class="sidebar-link {{ 'active' if request.view_args.get('section') == 'timetable' else '' }}" href="{{ url_for('college_admin_dashboard',section='timetable') }}"><span>▦</span>Timetable</a>
+<a class="sidebar-link {{ 'active' if request.view_args.get('section') == 'reports' else '' }}" href="{{ url_for('college_admin_dashboard',section='reports') }}"><span>◷</span>Attendance reports</a>
+<div class="sidebar-caption sidebar-bottom-caption">SETTINGS</div><a class="sidebar-link {{ 'active' if request.view_args.get('section') == 'settings' else '' }}" href="{{ url_for('college_admin_dashboard',section='settings') }}"><span>⚙</span>College settings</a>
 <div class="sidebar-footer"><span class="sidebar-avatar">{{ current_user.name[:1]|upper }}</span><span><b>{{ current_user.name }}</b><small>College Admin</small></span></div></aside><div class="college-main"><main class="container college-container">
 {% else %}<main class="container">{% endif %}
 {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
 {% block content %}{% endblock %}
-</main>{% if current_user.is_authenticated and current_user.role == 'college_admin' %}</div></div>{% endif %}
+</main>{% if current_user.is_authenticated and current_user.role == 'college_admin' %}</div></div>{% elif current_user.is_authenticated and current_user.role == 'student' %}</div></div>{% endif %}
 <footer><span>AttendX · Attendance, made accountable.</span><span>Secure rotating QR · 20-second expiry</span></footer>
 {% block scripts %}{% endblock %}
 </body></html>
