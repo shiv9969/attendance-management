@@ -20,6 +20,13 @@ if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# Recycle stale hosted-Postgres connections and validate pooled connections before reuse.
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 280,
+    "pool_timeout": 20,
+    "connect_args": {"connect_timeout": 10},
+}
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("COOKIE_SECURE", "1" if info.COOKIE_SECURE else "0") == "1"
@@ -480,37 +487,69 @@ def qr_token(subject_id):
 
 @app.route("/scan", methods=["GET", "POST"])
 def scan():
+    # A QR token must be valid at the moment it is first opened. Exchange it for
+    # a short-lived form ticket so the 20-second QR rotation doesn't interrupt typing.
     token = request.values.get("token", "").strip()
-    session = find_session(token)
-    if not session:
-        return render_template("scan_result.html", success=False, message="We couldn't find an active QR session. Please scan the latest QR displayed by your teacher."), 410
+    scan_ticket = request.values.get("scan_ticket", "").strip()
+    attendance_session = None
+
+    if request.method == "POST" and scan_ticket:
+        try:
+            payload = serializer.loads(scan_ticket, max_age=120)
+            if payload.get("purpose") != "scan-form":
+                raise BadSignature("Wrong ticket purpose")
+            attendance_session = db.session.get(AttendanceSession, int(payload["sid"]))
+            if not attendance_session or not attendance_session.is_valid():
+                attendance_session = None
+        except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
+            attendance_session = None
+    elif request.method == "GET":
+        attendance_session = find_session(token)
+        if attendance_session:
+            scan_ticket = serializer.dumps({
+                "sid": attendance_session.id,
+                "purpose": "scan-form",
+                "nonce": secrets.token_urlsafe(18),
+            })
+
+    if not attendance_session:
+        return render_template("scan_result.html", success=False,
+            message="This QR scan has expired or the attendance session has ended. Please scan the current QR shown by your teacher."), 410
+
     def mark_present(student):
-        if student.role != "student" or student.college_id != session.subject.college_id:
+        if student.role != "student" or student.college_id != attendance_session.subject.college_id:
             return render_template("scan_result.html", success=False, message="We couldn't find your registered student record. Please check your name and email."), 403
-        enrolled = Enrollment.query.filter_by(student_id=student.id, subject_id=session.subject_id).first()
+        enrolled = Enrollment.query.filter_by(student_id=student.id, subject_id=attendance_session.subject_id).first()
         if not enrolled:
             return render_template("scan_result.html", success=False, message="We couldn't find your enrollment for this subject. Please check with your teacher."), 403
-        existing = Attendance.query.filter_by(student_id=student.id, session_id=session.id).first()
+        existing = Attendance.query.filter_by(student_id=student.id, session_id=attendance_session.id).first()
         if existing:
             return render_template("scan_result.html", success=True, message="Your attendance is already marked for this session.")
-        db.session.add(Attendance(student_id=student.id, subject_id=session.subject_id, session_id=session.id))
-        db.session.commit()
-        log("attendance_marked", f"{student.email} present for {session.subject.code}")
-        return render_template("scan_result.html", success=True, message=f"Present marked for {session.subject.name}.")
+        db.session.add(Attendance(student_id=student.id, subject_id=attendance_session.subject_id, session_id=attendance_session.id))
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return render_template("scan_result.html", success=True, message="Your attendance is already marked for this session.")
+        log("attendance_marked", f"{student.email} present for {attendance_session.subject.code}")
+        return render_template("scan_result.html", success=True, message=f"Present marked for {attendance_session.subject.name}.")
+
     if current_user.is_authenticated:
         if current_user.role != "student":
             return render_template("scan_result.html", success=False, message="Only student accounts can mark attendance."), 403
         return mark_present(current_user)
+
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
         if not name or not email:
-            return render_template("scan_identity.html", token=token, error="Enter your registered full name and college email.")
-        student = User.query.filter_by(email=email, role="student", college_id=session.subject.college_id, account_status="active").first()
+            return render_template("scan_identity.html", token=scan_ticket, error="Enter your registered full name and college email.", subject=attendance_session.subject)
+        student = User.query.filter_by(email=email, role="student", college_id=attendance_session.subject.college_id, account_status="active").first()
         if not student or student.name.strip().casefold() != name.casefold():
-            return render_template("scan_identity.html", token=token, error="We couldn't find you in the registered student records. Please check your name and email.")
+            return render_template("scan_identity.html", token=scan_ticket, error="We couldn't find you in the registered student records. Please check your name and email.", subject=attendance_session.subject)
         return mark_present(student)
-    return render_template("scan_identity.html", token=token, error=None, subject=session.subject)
+
+    return render_template("scan_identity.html", token=scan_ticket, error=None, subject=attendance_session.subject)
 
 @app.route("/attendance")
 @role_required("student")

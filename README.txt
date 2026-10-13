@@ -1,15 +1,17 @@
-AttendX Teacher Dashboard update — changed files only
+AttendX QR attendance + database connection resilience patch
 
-Files included:
-- app.py (teacher-specific dashboard routes, subject editing, QR scan attendance flow, student analytics)
-- templates/teacher_dashboard.html
-- templates/teacher_section.html
-- templates/student_detail.html
-- templates/qr.html
-- templates/scan_identity.html (new)
+Files:
+- app.py (replace project root app.py)
+- templates/scan_identity.html (replace existing template)
 
-Replace app.py in the project root and the listed templates in templates/.
-No college_admin.html or other college dashboard templates are included or modified.
+Changes:
+- QR link must be valid when first opened; the form gets a signed 120-second scan ticket.
+- Form submission uses that ticket, so 20-second QR rotation does not interrupt typing.
+- Attendance session must remain active; ticket does not survive a stopped/ended session.
+- Duplicate attendance integrity conflicts are handled gracefully.
+- SQLAlchemy engine enables pool_pre_ping and recycles pooled connections to reduce stale hosted PostgreSQL connections.
 
-Validation performed: Python syntax compilation passed. This package has not been tested against your live Heroku/Neon database.
-QR sessions rotate the QR token every 20 seconds, and the countdown is hidden. Non-logged-in scanners are asked for the registered student name and email; the student must match an active student record in the same college and be enrolled in the subject. This name/email check does not independently prove identity.
+Important:
+- This reduces one common cause of intermittent 500s (stale DB connections) but does NOT prove the root cause. Check Heroku logs at the time of the next 500 for the exact traceback.
+- No College Admin HTML templates or college routes were intentionally changed.
+- Make a backup before replacing app.py.
