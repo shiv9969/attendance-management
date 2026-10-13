@@ -1,4 +1,6 @@
-import os, io, csv, secrets, hashlib, smtplib, time
+import os, io, csv, secrets, hashlib, smtplib, time, base64
+import qrcode
+from qrcode.image.svg import SvgPathImage
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -468,7 +470,13 @@ def qr_token(subject_id):
     active.token_hash = token_digest(token)
     # Keep the class session alive; only this QR token expires after 20 seconds.
     db.session.commit()
-    return jsonify({"url": url_for("scan", token=token, _external=True), "expires_in": 20})
+    scan_url = url_for("scan", token=token, _external=True)
+    # Generate QR on the server so browser/CDN access is not required.
+    qr_image = qrcode.make(scan_url, image_factory=SvgPathImage, box_size=8, border=3)
+    qr_buffer = io.BytesIO()
+    qr_image.save(qr_buffer)
+    qr_svg = "data:image/svg+xml;base64," + base64.b64encode(qr_buffer.getvalue()).decode("ascii")
+    return jsonify({"url": scan_url, "qr_svg": qr_svg, "expires_in": 20})
 
 @app.route("/scan", methods=["GET", "POST"])
 def scan():
