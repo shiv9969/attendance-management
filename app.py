@@ -257,6 +257,10 @@ def same_college_or_404(obj):
 def inject_globals():
     return {"now": utcnow()}
 
+@app.route("/create-account")
+def create_account_options():
+    return render_template("create_account_choice.html")
+
 @app.route("/")
 def index():
     return render_template("index.html")
