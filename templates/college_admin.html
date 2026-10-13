@@ -1,13 +1,5 @@
 {% extends "base.html" %}{% block title %}College dashboard{% endblock %}{% block content %}
 <div class="page-heading"><div><div class="eyebrow">COLLEGE ADMINISTRATION</div><h1>{{ college.name }}</h1><p class="muted">Manage your college from separate workspaces.</p></div></div>
 <div class="stats-grid"><div class="stat-card"><span>Student records</span><strong>{{ roster_count }}</strong></div><div class="stat-card"><span>Accounts</span><strong>{{ users|length }}</strong></div><div class="stat-card"><span>Pending teachers</span><strong>{{ pending_teachers|length }}</strong></div></div>
-<div class="grid cards-grid">
-<a class="panel dashboard-link" href="{{ url_for('college_students_page') }}"><h2>Students</h2><p class="muted">Add students, import CSV, view roster and export unique codes.</p><span class="btn primary">Open Students →</span></a>
-<a class="panel dashboard-link" href="{{ url_for('college_teachers_page') }}"><h2>Teachers</h2><p class="muted">Generate teacher invite codes and approve teacher accounts.</p><span class="btn primary">Open Teachers →</span></a>
-<a class="panel dashboard-link" href="{{ url_for('college_subjects_page') }}"><h2>Subjects</h2><p class="muted">Create subjects and assign approved teachers.</p><span class="btn primary">Open Subjects →</span></a>
-<a class="panel dashboard-link" href="{{ url_for('college_timetable_page') }}"><h2>Timetable</h2><p class="muted">Open timetable workspace.</p><span class="btn primary">Open Timetable →</span></a>
-<a class="panel dashboard-link" href="{{ url_for('college_reports_page') }}"><h2>Attendance Reports</h2><p class="muted">View attendance reporting workspace.</p><span class="btn primary">Open Reports →</span></a>
-<a class="panel dashboard-link" href="{{ url_for('college_settings_page') }}"><h2>College Settings</h2><p class="muted">View institution configuration.</p><span class="btn primary">Open Settings →</span></a>
-</div>
-<style>.cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;margin-top:24px}.dashboard-link{display:block;text-decoration:none;color:inherit;transition:transform .15s ease}.dashboard-link:hover{transform:translateY(-2px)}.dashboard-link .btn{display:inline-block;margin-top:12px}</style>
+
 {% endblock %}
