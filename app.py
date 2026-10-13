@@ -713,6 +713,20 @@ def bootstrap():
                 conn.exec_driver_sql(
                     "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL DEFAULT 'active'"
                 )
+                # Compatibility migration: older deployments may have a subject
+                # table without the multi-college college_id field. Preserve
+                # existing records and infer college_id from each subject's teacher.
+                conn.exec_driver_sql(
+                    "ALTER TABLE subject ADD COLUMN IF NOT EXISTS college_id INTEGER"
+                )
+                conn.exec_driver_sql(
+                    "UPDATE subject AS s SET college_id = u.college_id "
+                    "FROM \"user\" AS u "
+                    "WHERE s.teacher_id = u.id AND s.college_id IS NULL"
+                )
+                conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_subject_college_id ON subject (college_id)"
+                )
         elif db.engine.dialect.name == "sqlite":
             from sqlalchemy import inspect
             columns = {column["name"] for column in inspect(db.engine).get_columns("user")}
@@ -723,6 +737,12 @@ def bootstrap():
                     conn.exec_driver_sql(
                         "ALTER TABLE \"user\" ADD COLUMN account_status VARCHAR(20) NOT NULL DEFAULT 'active'"
                     )
+                subject_columns = {column["name"] for column in inspect(db.engine).get_columns("subject")}
+                if "college_id" not in subject_columns:
+                    conn.exec_driver_sql("ALTER TABLE subject ADD COLUMN college_id INTEGER")
+                conn.exec_driver_sql(
+                    'UPDATE subject SET college_id = (SELECT college_id FROM "user" WHERE "user".id = subject.teacher_id) WHERE college_id IS NULL'
+                )
         admin_email = os.getenv("ADMIN_EMAIL", info.ADMIN_EMAIL).strip().lower()
         admin_password = os.getenv("ADMIN_PASSWORD", info.ADMIN_PASSWORD)
         if admin_password.startswith("CHANGE-ME") or app.config["SECRET_KEY"].startswith("CHANGE-ME"):
