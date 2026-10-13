@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}College application status{% endblock %}
+{% block content %}
+<div class="narrow"><div class="form-card">
+  <div class="eyebrow">INSTITUTION ONBOARDING</div>
+  {% if college_request.status == 'pending' %}
+    <h2>Application submitted — waiting for approval</h2>
+    <p class="muted">Thank you, {{ college_request.contact_name }}. Your request for <strong>{{ college_request.college_name }}</strong> has been received.</p>
+    <div class="panel"><h3>What happens next?</h3><p>Our Super Admin team will review your application. Please allow a maximum of <strong>2–3 working days</strong> for a decision. Saturdays, Sundays and public holidays are not counted as working days.</p><p>We will email the decision and, if approved, your unique College Code to <strong>{{ college_request.official_email }}</strong>.</p></div>
+    <p class="muted">Current status: <span class="status-pill">Pending review</span></p>
+  {% elif college_request.status == 'approved' %}
+    <h2>Your application has been approved</h2><p>Check {{ college_request.official_email }} for your College Code and sign-in instructions.</p>
+    <a class="btn primary" href="{{ url_for('login') }}">Go to sign in</a>
+  {% else %}
+    <h2>Application update</h2><p>Your registration request was not approved. Please check your email or contact the AttendX administrator for details.</p>
+  {% endif %}
+  <p class="form-bottom"><a href="{{ url_for('index') }}">Back to AttendX</a></p>
+</div></div>
+{% endblock %}
