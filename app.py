@@ -607,14 +607,14 @@ def college_add_subject():
         flash("That subject code already exists in your college.","error")
     else:
         db.session.add(Subject(name=name,code=code,teacher_id=teacher.id,college_id=current_user.college_id)); db.session.commit(); log("college_subject_created",f"{code}: {name}"); flash("Subject added and assigned to teacher.","success")
-    return redirect(url_for("college_admin_dashboard", section="students"))
+    return redirect(url_for("college_admin_dashboard", section="subjects"))
 
 @app.route("/college-admin/roster-upload", methods=["POST"])
 @role_required("college_admin")
 def upload_roster():
     f=request.files.get("roster")
     if not f or not f.filename.lower().endswith(".csv"):
-        flash("Upload a CSV file with student_id,name,email,department,year,division columns.","error"); return redirect(url_for("college_admin_dashboard", section="teachers"))
+        flash("Upload a CSV file with student_id,name,email,department,year,division columns.","error"); return redirect(url_for("college_admin_dashboard", section="students"))
     try:
         rows=csv.DictReader(io.StringIO(f.stream.read().decode("utf-8-sig")))
         required={"student_id","name","email"}
@@ -629,14 +629,14 @@ def upload_roster():
         db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
-    return redirect(url_for("college_admin_dashboard", section="teachers"))
+    return redirect(url_for("college_admin_dashboard", section="students"))
 
 @app.route("/college-admin/teacher/<int:user_id>/<decision>", methods=["POST"])
 @role_required("college_admin")
 def decide_teacher(user_id, decision):
     if decision not in ("approve","reject"): abort(400)
     teacher=User.query.filter_by(id=user_id,college_id=current_user.college_id,role="teacher",account_status="pending").first_or_404()
-    teacher.account_status="active" if decision=="approve" else "rejected"; teacher.active=(decision=="approve"); db.session.commit(); log("teacher_"+decision,teacher.email); flash("Teacher request updated.","success"); return redirect(url_for("college_admin_dashboard"))
+    teacher.account_status="active" if decision=="approve" else "rejected"; teacher.active=(decision=="approve"); db.session.commit(); log("teacher_"+decision,teacher.email); flash("Teacher request updated.","success"); return redirect(url_for("college_admin_dashboard", section="teachers"))
 
 @app.route("/teacher/signup", methods=["GET","POST"])
 def teacher_signup():
@@ -656,7 +656,7 @@ def generate_teacher_code():
     code=generate_unique_code("TCH")
     db.session.add(TeacherInvite(college_id=current_user.college_id,code=code)); db.session.commit()
     flash(f"New teacher registration code generated: {code}","success")
-    return redirect(url_for("college_admin_dashboard"))
+    return redirect(url_for("college_admin_dashboard", section="teachers"))
 
 @app.route("/college-admin/roster-codes.csv")
 @role_required("college_admin")
