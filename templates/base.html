@@ -14,7 +14,7 @@
 {% if current_user.role in ['teacher','admin'] %}<a href="{{ url_for('student_lookup') }}">Students</a><a href="{{ url_for('review_corrections') }}">Corrections</a><a href="{{ url_for('export_csv') }}">Export CSV</a>{% endif %}
 {% if current_user.role == 'admin' %}<a href="{{ url_for('admin_dashboard') }}">Super Admin</a><a href="{{ url_for('college_requests') }}">College requests</a>{% elif current_user.role == 'college_admin' %}<a href="{{ url_for('college_admin_dashboard') }}">College Admin</a>{% endif %}
 <form class="inline" method="post" action="{{ url_for('logout') }}"><button class="nav-button" type="submit">Log out</button></form>
-{% else %}<a href="{{ url_for('login') }}">Log in</a><a class="nav-cta" href="{{ url_for('signup') }}">Create account</a>{% endif %}
+{% else %}<a href="{{ url_for('login') }}">Log in</a><a class="nav-cta" href="{{ url_for('create_account_choice') }}">Create account</a>{% endif %}
 </nav></header>
 {% if current_user.is_authenticated and current_user.role == 'college_admin' %}
 <div class="college-shell"><aside class="college-sidebar"><a class="sidebar-brand" href="{{ url_for('college_admin_dashboard') }}"><span class="brand-mark">A</span><span>Attend<span class="brand-x">X</span><small>COLLEGE WORKSPACE</small></span></a><div class="sidebar-caption">WORKSPACE</div>
