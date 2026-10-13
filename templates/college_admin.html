@@ -1,5 +1,10 @@
-{% extends "base.html" %}{% block title %}College dashboard{% endblock %}{% block content %}
-<div class="page-heading"><div><div class="eyebrow">COLLEGE ADMINISTRATION</div><h1>{{ college.name }}</h1><p class="muted">Manage your college from separate workspaces.</p></div></div>
-<div class="stats-grid"><div class="stat-card"><span>Student records</span><strong>{{ roster_count }}</strong></div><div class="stat-card"><span>Accounts</span><strong>{{ users|length }}</strong></div><div class="stat-card"><span>Pending teachers</span><strong>{{ pending_teachers|length }}</strong></div></div>
-
+{% extends "base.html" %}
+{% block title %}College dashboard{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">COLLEGE ADMINISTRATION</div><h1>{{ college.name }}</h1><p class="muted">Use the left sidebar to manage each part of your college workspace.</p></div></div>
+<div class="stats-grid">
+  <div class="stat-card"><span>Student records</span><strong>{{ roster_count }}</strong></div>
+  <div class="stat-card"><span>Accounts</span><strong>{{ users|length }}</strong></div>
+  <div class="stat-card"><span>Pending teachers</span><strong>{{ pending_teachers|length }}</strong></div>
+</div>
 {% endblock %}
