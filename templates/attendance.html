@@ -5,6 +5,11 @@
   <div><div class="eyebrow">YOUR RECORDS</div><h1>Attendance report</h1><p class="muted">Your overall progress, subject-wise performance and class history.</p></div>
   <div class="report-actions"><a class="btn primary" href="{{ url_for('student_scan') }}">▣ Scan QR</a><a class="btn secondary" href="{{ url_for('dashboard') }}">← Dashboard</a></div>
 </div>
+<div class="attendance-report-tabs" role="tablist" aria-label="Attendance report type">
+  <button class="report-tab active" type="button" role="tab" aria-selected="true" aria-controls="overall-report-panel" id="overall-report-tab" data-report-tab="overall">Overall report</button>
+  <button class="report-tab" type="button" role="tab" aria-selected="false" aria-controls="individual-report-panel" id="individual-report-tab" data-report-tab="individual">Individual subject reports</button>
+</div>
+<section id="overall-report-panel" class="attendance-report-panel" role="tabpanel" aria-labelledby="overall-report-tab">
 <div class="report-summary-grid">
   <section class="panel report-overview">
     <div><div class="eyebrow">CURRENT SEMESTER</div><h2>Attendance status</h2><p class="muted">Across your enrolled subjects</p></div>
@@ -20,7 +25,9 @@
     <div class="stat-card"><span class="stat-icon mint">▦</span><span>Enrolled subjects</span><strong>{{ subjects|length }}</strong><small>Subjects linked to your account</small></div>
   </section>
 </div>
-<div class="section-head"><div><h2>Subject-wise attendance</h2><p class="muted">Track each subject against the 75% target.</p></div></div>
+</section>
+<section id="individual-report-panel" class="attendance-report-panel" role="tabpanel" aria-labelledby="individual-report-tab" hidden>
+<div class="section-head"><div><h2>Individual subject reports</h2><p class="muted">Attendance percentage, present/absent sessions and status for each subject.</p></div></div>
 {% if report_rows %}
 <div class="report-subject-grid">
 {% for item in report_rows %}
@@ -40,4 +47,27 @@
 <div class="section-head"><div><h2>Attendance history</h2><p class="muted">Filter and review your marked attendance records.</p></div></div>
 <form class="filter-bar" method="get"><label>Filter by subject<select name="subject_id"><option value="">All subjects</option>{% for s in subjects %}<option value="{{ s.id }}" {{ 'selected' if selected == s.id else '' }}>{{ s.name }}</option>{% endfor %}</select></label><button class="btn primary" type="submit">Apply filter</button><a class="btn secondary" href="{{ url_for('attendance_report') }}">Reset</a></form>
 <div class="table-wrap"><table><thead><tr><th>Subject</th><th>Date & time</th><th>Status</th></tr></thead><tbody>{% for r in records %}<tr><td><strong>{{ r.subject.name }}</strong><small class="table-sub">{{ r.subject.code }}</small></td><td>{{ r.marked_at.strftime('%d %b %Y, %I:%M %p') }}</td><td><span class="pill green">{{ r.status }}</span></td></tr>{% else %}<tr><td colspan="3" class="empty-cell">No matching attendance records.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const tabs = document.querySelectorAll('[data-report-tab]');
+  const panels = {
+    overall: document.getElementById('overall-report-panel'),
+    individual: document.getElementById('individual-report-panel')
+  };
+  tabs.forEach((tab) => tab.addEventListener('click', () => {
+    const selected = tab.dataset.reportTab;
+    tabs.forEach((item) => {
+      const active = item === tab;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    Object.entries(panels).forEach(([name, panel]) => {
+      panel.hidden = name !== selected;
+    });
+  }));
+})();
+</script>
 {% endblock %}
