@@ -8,6 +8,7 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 import info
 
 app = Flask(__name__)
@@ -239,7 +240,7 @@ def generate_college_code():
 
 def generate_unique_code(prefix):
     for _ in range(100):
-        code = prefix + secrets.token_hex(3).upper()
+        code = prefix + "-" + secrets.token_hex(3).upper()
         if not User.query.filter_by(unique_code=code).first() and not StudentRoster.query.filter_by(unique_code=code).first() and not TeacherInvite.query.filter_by(code=code).first():
             return code
     raise RuntimeError("Could not generate a unique code")
@@ -262,7 +263,7 @@ def index():
 def signup():
     if request.method == "POST":
         name=request.form.get("name", "").strip(); email=request.form.get("email", "").strip().lower()
-        password=request.form.get("password", ""); code=request.form.get("unique_code", "").strip().upper().replace("-", "")
+        password=request.form.get("password", ""); code=request.form.get("unique_code", "").strip().upper()
         student_id=request.form.get("roll_no", "").strip(); department=request.form.get("department", "").strip(); year=request.form.get("year", "").strip()
         if not name or not email or not code or len(password)<8:
             flash("Enter your unique student code, name, email and password (8+ characters).", "error"); return redirect(url_for("signup"))
@@ -710,23 +711,25 @@ def bootstrap():
             roster_row.unique_code = generate_unique_code("STU")
         for account in User.query.filter(User.unique_code.is_(None), User.role.in_(["student", "teacher"])).all():
             account.unique_code = generate_unique_code("STU" if account.role == "student" else "TCH")
-        # Normalize existing student/teacher codes to the no-hyphen format.
-        for roster_row in StudentRoster.query.filter(StudentRoster.unique_code.isnot(None)).all():
-            roster_row.unique_code = roster_row.unique_code.replace("STU-", "STU").replace("TCH-", "TCH")
-        for account in User.query.filter(User.unique_code.isnot(None)).all():
-            account.unique_code = account.unique_code.replace("STU-", "STU").replace("TCH-", "TCH")
-        for invite in TeacherInvite.query.all():
-            invite.code = invite.code.replace("STU-", "STU").replace("TCH-", "TCH")
         db.session.commit()
         admin_email = os.getenv("ADMIN_EMAIL", info.ADMIN_EMAIL).strip().lower()
         admin_password = os.getenv("ADMIN_PASSWORD", info.ADMIN_PASSWORD)
         if admin_password.startswith("CHANGE-ME") or app.config["SECRET_KEY"].startswith("CHANGE-ME"):
             print("WARNING: Edit info.py and replace the CHANGE-ME values before using this app beyond local testing.")
+        # Multiple Gunicorn workers can run bootstrap() simultaneously.
+        # Re-check and gracefully handle the unique-email race instead of
+        # crashing a worker when another worker creates the admin first.
         if admin_email and admin_password and not User.query.filter_by(email=admin_email).first():
-            admin = User(name="System Admin", email=admin_email, role="admin")
-            admin.set_password(admin_password)
-            db.session.add(admin)
-            db.session.commit()
+            try:
+                admin = User(name="System Admin", email=admin_email, role="admin")
+                admin.set_password(admin_password)
+                db.session.add(admin)
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                # Another worker may have inserted this admin concurrently.
+                if not User.query.filter_by(email=admin_email).first():
+                    raise
 
 bootstrap()
 
