@@ -130,3 +130,61 @@ input,select,textarea{background:#fff;border-color:#dbe6f2;color:#172b4d}
 .report-tab:focus-visible{outline:3px solid #9fc4ff;outline-offset:2px}
 .attendance-report-panel[hidden]{display:none!important}
 @media(max-width:480px){.attendance-report-tabs{width:100%;display:grid;grid-template-columns:1fr}.report-tab{width:100%;text-align:center}}
+
+
+/* Student-only light sidebar with compact floating active item */
+.student-sidebar {
+  background: #fff !important;
+  color: #233653 !important;
+  border-right: 1px solid #e8edf5;
+  padding: 22px 14px !important;
+}
+.student-sidebar .sidebar-brand { color: #172b4d !important; }
+.student-sidebar .sidebar-brand small,
+.student-sidebar .sidebar-caption { color: #7d8ca5 !important; }
+.student-sidebar .sidebar-link {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  color: #53637b !important;
+  background: transparent !important;
+  border: 1px solid transparent;
+  border-radius: 13px !important;
+  margin: 3px 0;
+  padding: 12px 13px !important;
+  transition: background .2s ease, box-shadow .2s ease;
+}
+.student-sidebar .sidebar-link span { color: #6577a0; }
+.student-sidebar .sidebar-link:hover {
+  background: #f5f6ff !important;
+  color: #4f46e5 !important;
+}
+.student-sidebar .sidebar-link.active {
+  background: #eef0ff !important;
+  color: #4f46e5 !important;
+  border-color: #e0e4ff;
+  box-shadow: 0 6px 16px rgba(70,77,180,.12);
+}
+.student-sidebar .sidebar-link.active span { color: #4f46e5 !important; }
+.student-sidebar-note { border-top: 1px solid #e8edf5 !important; color: #243654 !important; }
+.student-sidebar-note small { color: #7888a1 !important; }
+.student-sidebar .sidebar-avatar { background: #eef0ff !important; color: #4f46e5 !important; }
+.student-sidebar .sidebar-logout-button { color: #53637b !important; }
+.student-sidebar .sidebar-logout-button:hover {
+  background: #f5f6ff !important;
+  color: #4f46e5 !important;
+}
+.student-sidebar .sidebar-brand .brand-mark { background: #6258e8 !important; color: #fff !important; }
+.student-sidebar .brand-x { color: #6258e8 !important; }
+.student-scanner-panel { width: 100%; max-width: 760px; margin: 0 auto; }
+.scanner-actions { justify-content: flex-start; }
+.scanner-message { overflow-wrap: anywhere; text-align: left; }
+@media (max-width: 820px) {
+  .student-sidebar { border-right: 0; border-bottom: 1px solid #e8edf5; }
+  .student-sidebar > a.sidebar-link {
+    display: inline-flex !important;
+    width: auto !important;
+    flex: 0 0 auto;
+  }
+}
