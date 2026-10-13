@@ -694,42 +694,57 @@ def not_found(e):
     return render_template("error.html", code=404, message="We couldn't find that page."), 404
 
 def bootstrap():
-    with app.app_context():
-        db.create_all()
-        # Lightweight additive migration for existing SQLite/Postgres databases.
-        from sqlalchemy import text, inspect
-        inspector = inspect(db.engine)
-        for table_name, column_name, ddl in [
-            ("user", "unique_code", "VARCHAR(32)"),
-            ("student_roster", "unique_code", "VARCHAR(32)"),
-        ]:
-            if table_name in inspector.get_table_names() and column_name not in [c["name"] for c in inspector.get_columns(table_name)]:
-                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
-        db.session.commit()
-        # Backfill unique codes for records created before this update.
-        for roster_row in StudentRoster.query.filter(StudentRoster.unique_code.is_(None)).all():
-            roster_row.unique_code = generate_unique_code("STU")
-        for account in User.query.filter(User.unique_code.is_(None), User.role.in_(["student", "teacher"])).all():
-            account.unique_code = generate_unique_code("STU" if account.role == "student" else "TCH")
-        db.session.commit()
-        admin_email = os.getenv("ADMIN_EMAIL", info.ADMIN_EMAIL).strip().lower()
-        admin_password = os.getenv("ADMIN_PASSWORD", info.ADMIN_PASSWORD)
-        if admin_password.startswith("CHANGE-ME") or app.config["SECRET_KEY"].startswith("CHANGE-ME"):
-            print("WARNING: Edit info.py and replace the CHANGE-ME values before using this app beyond local testing.")
-        # Multiple Gunicorn workers can run bootstrap() simultaneously.
-        # Re-check and gracefully handle the unique-email race instead of
-        # crashing a worker when another worker creates the admin first.
-        if admin_email and admin_password and not User.query.filter_by(email=admin_email).first():
-            try:
-                admin = User(name="System Admin", email=admin_email, role="admin")
-                admin.set_password(admin_password)
-                db.session.add(admin)
-                db.session.commit()
-            except IntegrityError:
-                db.session.rollback()
-                # Another worker may have inserted this admin concurrently.
-                if not User.query.filter_by(email=admin_email).first():
-                    raise
+    # Gunicorn starts multiple workers; serialize schema creation and seeding
+    # across those processes so two workers cannot CREATE the same table.
+    try:
+        import fcntl  # available on Heroku/Linux
+    except ImportError:
+        fcntl = None
+
+    lock_file = open(os.path.join('/tmp', 'attendx-bootstrap.lock'), 'a+')
+    try:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        with app.app_context():
+            db.create_all()
+            # Lightweight additive migration for existing SQLite/Postgres databases.
+            from sqlalchemy import text, inspect
+            inspector = inspect(db.engine)
+            for table_name, column_name, ddl in [
+                ("user", "unique_code", "VARCHAR(32)"),
+                ("student_roster", "unique_code", "VARCHAR(32)"),
+            ]:
+                if table_name in inspector.get_table_names() and column_name not in [c["name"] for c in inspector.get_columns(table_name)]:
+                    db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
+            db.session.commit()
+            # Backfill unique codes for records created before this update.
+            for roster_row in StudentRoster.query.filter(StudentRoster.unique_code.is_(None)).all():
+                roster_row.unique_code = generate_unique_code("STU")
+            for account in User.query.filter(User.unique_code.is_(None), User.role.in_(["student", "teacher"])).all():
+                account.unique_code = generate_unique_code("STU" if account.role == "student" else "TCH")
+            db.session.commit()
+            admin_email = os.getenv("ADMIN_EMAIL", info.ADMIN_EMAIL).strip().lower()
+            admin_password = os.getenv("ADMIN_PASSWORD", info.ADMIN_PASSWORD)
+            if admin_password.startswith("CHANGE-ME") or app.config["SECRET_KEY"].startswith("CHANGE-ME"):
+                print("WARNING: Edit info.py and replace the CHANGE-ME values before using this app beyond local testing.")
+            # Multiple Gunicorn workers can run bootstrap() simultaneously.
+            # Re-check and gracefully handle the unique-email race instead of
+            # crashing a worker when another worker creates the admin first.
+            if admin_email and admin_password and not User.query.filter_by(email=admin_email).first():
+                try:
+                    admin = User(name="System Admin", email=admin_email, role="admin")
+                    admin.set_password(admin_password)
+                    db.session.add(admin)
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    # Another worker may have inserted this admin concurrently.
+                    if not User.query.filter_by(email=admin_email).first():
+                        raise
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
 
 bootstrap()
 
