@@ -722,7 +722,10 @@ def bootstrap():
                 ("student_roster", "unique_code", "VARCHAR(32)"),
             ]:
                 if table_name in inspector.get_table_names() and column_name not in [c["name"] for c in inspector.get_columns(table_name)]:
-                    db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
+                    # Quote identifiers for PostgreSQL: `user` is a reserved keyword.
+                    quoted_table = db.engine.dialect.identifier_preparer.quote(table_name)
+                    quoted_column = db.engine.dialect.identifier_preparer.quote(column_name)
+                    db.session.execute(text(f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_column} {ddl}"))
             db.session.commit()
             # Backfill unique codes for records created before this update.
             for roster_row in StudentRoster.query.filter(StudentRoster.unique_code.is_(None)).all():
