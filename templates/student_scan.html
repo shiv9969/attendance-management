@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Scan attendance{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><div class="eyebrow">QUICK ATTENDANCE</div><h1>Scan class QR</h1>
+  <p class="muted">Allow camera access and scan the live QR shown by your teacher.</p></div>
+  <a class="btn secondary" href="{{ url_for('dashboard') }}">← Dashboard</a>
+</div>
+<section class="panel student-scanner-panel">
+  <div class="scanner-header"><span class="scanner-icon">▣</span><div><h2>Camera scanner</h2><p class="muted">Point your camera at the teacher's live AttendX QR code.</p></div></div>
+  <div id="reader" aria-label="Camera QR scanner"></div>
+  <div class="scanner-actions">
+    <button class="btn primary" id="start-scan" type="button">Start camera</button>
+    <button class="btn secondary" id="stop-scan" type="button" disabled>Stop camera</button>
+    <a class="btn secondary" href="{{ url_for('attendance_report') }}">View attendance report</a>
+  </div>
+  <p id="scan-message" class="muted scanner-message" role="status">Camera access works on HTTPS websites and localhost. Your browser may ask for permission.</p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+(() => {
+  const startBtn = document.getElementById('start-scan');
+  const stopBtn = document.getElementById('stop-scan');
+  const message = document.getElementById('scan-message');
+  let scanner = null, running = false, handled = false;
+  const say = (text) => { message.textContent = text; };
+  async function stopCamera() {
+    if (scanner && running) {
+      try { await scanner.stop(); } catch (_) {}
+      running = false;
+    }
+    stopBtn.disabled = true;
+    startBtn.disabled = false;
+  }
+  startBtn.addEventListener('click', async () => {
+    if (running) return;
+    if (!window.Html5Qrcode) {
+      say('Scanner library could not load. Check your internet connection and reload this page.');
+      return;
+    }
+    handled = false;
+    scanner = scanner || new Html5Qrcode('reader');
+    startBtn.disabled = true;
+    say('Requesting camera permission…');
+    try {
+      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 230, height: 230 } },
+        async (decodedText) => {
+          if (handled) return;
+          let target;
+          try { target = new URL(decodedText); } catch (_) { say('This QR does not contain a valid attendance link.'); return; }
+          if (target.protocol !== 'https:' && target.hostname !== 'localhost' && target.hostname !== '127.0.0.1') {
+            say('For safety, only secure AttendX links can be opened.');
+            return;
+          }
+          if (!target.pathname.endsWith('/scan') || !target.searchParams.has('token')) {
+            say('This is not an AttendX class attendance QR. Please scan the current QR from your teacher.');
+            return;
+          }
+          handled = true;
+          say('QR scanned. Opening attendance confirmation…');
+          await stopCamera();
+          window.location.assign(target.href);
+        },
+        () => {}
+      );
+      running = true;
+      stopBtn.disabled = false;
+      say('Camera is on. Hold the QR inside the scan frame.');
+    } catch (err) {
+      startBtn.disabled = false;
+      say('Could not start camera. Allow camera permission, use HTTPS, and close other apps using the camera.');
+    }
+  });
+  stopBtn.addEventListener('click', async () => { await stopCamera(); say('Camera stopped.'); });
+  window.addEventListener('pagehide', () => { if (scanner && running) scanner.stop().catch(() => {}); });
+})();
+</script>
+{% endblock %}
