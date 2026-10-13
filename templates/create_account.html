@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Create an account{% endblock %}
+{% block content %}
+<section class="account-choice-page">
+  <div class="account-choice-intro">
+    <span class="eyebrow"><span class="dot"></span> GET STARTED WITH ATTENDX</span>
+    <h1>Choose your <span>account type.</span></h1>
+    <p class="lead">Select the option that matches your role. Each account gets the right registration process and access.</p>
+  </div>
+  <div class="account-choice-grid">
+    <article class="account-choice-card featured-choice">
+      <div class="choice-icon">▤</div><span class="choice-tag">COLLEGE / INSTITUTE</span>
+      <h2>Create a college account</h2>
+      <p>Register your institution. The AttendX Super Admin will review the request before the college portal is activated.</p>
+      <a class="btn primary full" href="{{ url_for('college_register') }}">Register college <span>→</span></a>
+    </article>
+    <article class="account-choice-card">
+      <div class="choice-icon teacher-icon">♙</div><span class="choice-tag">FACULTY</span>
+      <h2>Create a teacher account</h2>
+      <p>Join an already-approved college using its College Code. Your college admin must approve your teacher request.</p>
+      <a class="btn secondary full" href="{{ url_for('teacher_signup') }}">Register as teacher <span>→</span></a>
+    </article>
+    <article class="account-choice-card">
+      <div class="choice-icon student-icon">♧</div><span class="choice-tag">STUDENT</span>
+      <h2>Create a student account</h2>
+      <p>Use the approved College Code and student details already provided by your college.</p>
+      <a class="btn secondary full" href="{{ url_for('signup') }}">Register as student <span>→</span></a>
+    </article>
+  </div>
+  <p class="choice-login">Already registered? <a href="{{ url_for('login') }}">Log in to AttendX</a></p>
+</section>
+{% endblock %}
