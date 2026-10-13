@@ -356,10 +356,38 @@ def dashboard():
         corrections = CorrectionRequest.query.filter_by(student_id=current_user.id).order_by(CorrectionRequest.created_at.desc()).limit(5).all()
         return render_template("student_dashboard.html", records=records, total=total, subjects=subjects, corrections=corrections)
     if current_user.role == "teacher":
-        subjects = Subject.query.filter_by(teacher_id=current_user.id, college_id=current_user.college_id).all()
-        return render_template("teacher_dashboard.html", subjects=subjects)
-    if current_user.role == "college_admin": return redirect(url_for("college_admin_dashboard", section="subjects"))
+        subjects = Subject.query.filter_by(teacher_id=current_user.id, college_id=current_user.college_id).order_by(Subject.name).all()
+        student_ids = {e.student_id for e in Enrollment.query.join(Subject, Enrollment.subject_id == Subject.id).filter(Subject.teacher_id == current_user.id).all()}
+        active_sessions = AttendanceSession.query.join(Subject, AttendanceSession.subject_id == Subject.id).filter(Subject.teacher_id == current_user.id, AttendanceSession.active == True).count()
+        return render_template("teacher_dashboard.html", subjects=subjects, student_count=len(student_ids), active_sessions=active_sessions, page="dashboard")
+    if current_user.role == "college_admin": return redirect(url_for("college_admin_dashboard"))
     return redirect(url_for("admin_dashboard"))
+
+@app.route("/teacher/<section>")
+@role_required("teacher")
+def teacher_section(section):
+    if section not in ("subjects", "students", "reports", "profile"):
+        abort(404)
+    subjects = Subject.query.filter_by(teacher_id=current_user.id, college_id=current_user.college_id).order_by(Subject.name).all()
+    student_ids = [e.student_id for e in Enrollment.query.join(Subject, Enrollment.subject_id == Subject.id).filter(Subject.teacher_id == current_user.id).all()]
+    students = User.query.filter(User.id.in_(student_ids), User.role == "student").order_by(User.name).all() if student_ids else []
+    records = Attendance.query.join(Subject, Attendance.subject_id == Subject.id).filter(Subject.teacher_id == current_user.id).order_by(Attendance.marked_at.desc()).limit(200).all()
+    return render_template("teacher_section.html", page=section, subjects=subjects, students=students, records=records)
+
+@app.route("/teacher/subject/<int:subject_id>/edit", methods=["POST"])
+@role_required("teacher")
+def edit_subject(subject_id):
+    subject = Subject.query.filter_by(id=subject_id, teacher_id=current_user.id, college_id=current_user.college_id).first_or_404()
+    name = request.form.get("name", "").strip()
+    code = request.form.get("code", "").strip().upper()
+    if not name or not code or len(name) > 120 or len(code) > 30:
+        flash("Enter a valid subject name and code.", "error")
+    else:
+        subject.name, subject.code = name, code
+        db.session.commit()
+        log("subject_updated", f"{code}: {name}")
+        flash("Subject updated.", "success")
+    return redirect(url_for("teacher_section", section="subjects"))
 
 @app.route("/teacher/subject", methods=["POST"])
 @role_required("teacher", "college_admin")
@@ -438,32 +466,43 @@ def qr_token(subject_id):
         db.session.flush()
     token = make_qr_token(active.id)
     active.token_hash = token_digest(token)
-    active.ends_at = min(active.ends_at, utcnow() + timedelta(seconds=20))
+    # Keep the class session alive; only this QR token expires after 20 seconds.
     db.session.commit()
     return jsonify({"url": url_for("scan", token=token, _external=True), "expires_in": 20})
 
-@app.route("/scan")
+@app.route("/scan", methods=["GET", "POST"])
 def scan():
-    token = request.args.get("token", "").strip()
+    token = request.values.get("token", "").strip()
     session = find_session(token)
     if not session:
-        return render_template("scan_result.html", success=False,
-                               message="This QR code has expired. Please scan the latest QR displayed by your teacher."), 410
-    if not current_user.is_authenticated:
-        return redirect(url_for("login", token=token))
-    if current_user.role != "student" or current_user.college_id != session.subject.college_id:
-        return render_template("scan_result.html", success=False, message="Only student accounts can mark attendance."), 403
-    enrolled = Enrollment.query.filter_by(student_id=current_user.id, subject_id=session.subject_id).first()
-    if not enrolled:
-        return render_template("scan_result.html", success=False,
-                               message="We couldn't find your enrollment for this subject. Check that you signed up with your registered college email and ask your teacher to enroll you."), 403
-    existing = Attendance.query.filter_by(student_id=current_user.id, session_id=session.id).first()
-    if existing:
-        return render_template("scan_result.html", success=True, message="Your attendance is already marked for this session.")
-    db.session.add(Attendance(student_id=current_user.id, subject_id=session.subject_id, session_id=session.id))
-    db.session.commit()
-    log("attendance_marked", f"{current_user.email} present for {session.subject.code}")
-    return render_template("scan_result.html", success=True, message=f"Present marked for {session.subject.name}.")
+        return render_template("scan_result.html", success=False, message="We couldn't find an active QR session. Please scan the latest QR displayed by your teacher."), 410
+    def mark_present(student):
+        if student.role != "student" or student.college_id != session.subject.college_id:
+            return render_template("scan_result.html", success=False, message="We couldn't find your registered student record. Please check your name and email."), 403
+        enrolled = Enrollment.query.filter_by(student_id=student.id, subject_id=session.subject_id).first()
+        if not enrolled:
+            return render_template("scan_result.html", success=False, message="We couldn't find your enrollment for this subject. Please check with your teacher."), 403
+        existing = Attendance.query.filter_by(student_id=student.id, session_id=session.id).first()
+        if existing:
+            return render_template("scan_result.html", success=True, message="Your attendance is already marked for this session.")
+        db.session.add(Attendance(student_id=student.id, subject_id=session.subject_id, session_id=session.id))
+        db.session.commit()
+        log("attendance_marked", f"{student.email} present for {session.subject.code}")
+        return render_template("scan_result.html", success=True, message=f"Present marked for {session.subject.name}.")
+    if current_user.is_authenticated:
+        if current_user.role != "student":
+            return render_template("scan_result.html", success=False, message="Only student accounts can mark attendance."), 403
+        return mark_present(current_user)
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        if not name or not email:
+            return render_template("scan_identity.html", token=token, error="Enter your registered full name and college email.")
+        student = User.query.filter_by(email=email, role="student", college_id=session.subject.college_id, account_status="active").first()
+        if not student or student.name.strip().casefold() != name.casefold():
+            return render_template("scan_identity.html", token=token, error="We couldn't find you in the registered student records. Please check your name and email.")
+        return mark_present(student)
+    return render_template("scan_identity.html", token=token, error=None, subject=session.subject)
 
 @app.route("/attendance")
 @role_required("student")
@@ -501,7 +540,11 @@ def student_detail(student_id):
         if not Enrollment.query.filter(Enrollment.student_id == student.id, Enrollment.subject_id.in_(subject_ids)).first():
             abort(403)
     records = Attendance.query.filter_by(student_id=student.id).order_by(Attendance.marked_at.desc()).all()
-    return render_template("student_detail.html", student=student, records=records)
+    visible_subjects = Subject.query.filter(Subject.id.in_(subject_ids)).all() if current_user.role == "teacher" else Subject.query.filter_by(college_id=current_user.college_id).all()
+    total_sessions = sum(AttendanceSession.query.filter_by(subject_id=sub.id).count() for sub in visible_subjects if Enrollment.query.filter_by(student_id=student.id, subject_id=sub.id).first())
+    present_count = sum(1 for r in records if r.subject_id in {sub.id for sub in visible_subjects})
+    pct = round(present_count / total_sessions * 100) if total_sessions else 0
+    return render_template("student_detail.html", student=student, records=records, attendance_pct=min(pct, 100), present_count=present_count, total_sessions=total_sessions)
 
 @app.route("/corrections", methods=["GET", "POST"])
 @role_required("student")
@@ -573,28 +616,11 @@ def decide_college_request(req_id, decision):
     flash("College approved and code generated." if decision=="approve" else "College request rejected.","success")
     return redirect(url_for("college_requests"))
 
-def _college_page_data():
-    college = db.session.get(College, current_user.college_id)
-    users = User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(300).all()
-    roster = StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(500).all()
-    teachers = [u for u in users if u.role == "teacher"]
-    subjects = Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all()
-    return dict(college=college, users=users, teachers=teachers,
-        pending_teachers=[t for t in teachers if t.account_status == "pending"],
-        approved_teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher", account_status="active").order_by(User.name).all(),
-        roster=roster, roster_count=len(roster), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id, used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=subjects)
-
 @app.route("/college-admin")
-@app.route("/college-admin/<section>")
 @role_required("college_admin")
-def college_admin_dashboard(section="overview"):
-    allowed = {"overview", "students", "teachers", "subjects", "timetable", "reports", "settings"}
-    if section not in allowed:
-        abort(404)
-    data = _college_page_data()
-    data["section"] = section
-    template = {"overview": "college_admin.html", "students": "college_students.html", "teachers": "college_teachers.html", "subjects": "college_subjects.html", "timetable": "college_timetable.html", "reports": "college_reports.html", "settings": "college_settings.html"}[section]
-    return render_template(template, **data)
+def college_admin_dashboard():
+    college= db.session.get(College,current_user.college_id)
+    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(300).all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id,used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="active").order_by(User.name).all())
 
 @app.route("/college-admin/subjects", methods=["POST"])
 @role_required("college_admin")
@@ -607,14 +633,14 @@ def college_add_subject():
         flash("That subject code already exists in your college.","error")
     else:
         db.session.add(Subject(name=name,code=code,teacher_id=teacher.id,college_id=current_user.college_id)); db.session.commit(); log("college_subject_created",f"{code}: {name}"); flash("Subject added and assigned to teacher.","success")
-    return redirect(url_for("college_admin_dashboard", section="subjects"))
+    return redirect(url_for("college_admin_dashboard"))
 
 @app.route("/college-admin/roster-upload", methods=["POST"])
 @role_required("college_admin")
 def upload_roster():
     f=request.files.get("roster")
     if not f or not f.filename.lower().endswith(".csv"):
-        flash("Upload a CSV file with student_id,name,email,department,year,division columns.","error"); return redirect(url_for("college_admin_dashboard", section="students"))
+        flash("Upload a CSV file with student_id,name,email,department,year,division columns.","error"); return redirect(url_for("college_admin_dashboard"))
     try:
         rows=csv.DictReader(io.StringIO(f.stream.read().decode("utf-8-sig")))
         required={"student_id","name","email"}
@@ -629,14 +655,14 @@ def upload_roster():
         db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
-    return redirect(url_for("college_admin_dashboard", section="students"))
+    return redirect(url_for("college_admin_dashboard"))
 
 @app.route("/college-admin/teacher/<int:user_id>/<decision>", methods=["POST"])
 @role_required("college_admin")
 def decide_teacher(user_id, decision):
     if decision not in ("approve","reject"): abort(400)
     teacher=User.query.filter_by(id=user_id,college_id=current_user.college_id,role="teacher",account_status="pending").first_or_404()
-    teacher.account_status="active" if decision=="approve" else "rejected"; teacher.active=(decision=="approve"); db.session.commit(); log("teacher_"+decision,teacher.email); flash("Teacher request updated.","success"); return redirect(url_for("college_admin_dashboard", section="teachers"))
+    teacher.account_status="active" if decision=="approve" else "rejected"; teacher.active=(decision=="approve"); db.session.commit(); log("teacher_"+decision,teacher.email); flash("Teacher request updated.","success"); return redirect(url_for("college_admin_dashboard"))
 
 @app.route("/teacher/signup", methods=["GET","POST"])
 def teacher_signup():
@@ -656,23 +682,7 @@ def generate_teacher_code():
     code=generate_unique_code("TCH")
     db.session.add(TeacherInvite(college_id=current_user.college_id,code=code)); db.session.commit()
     flash(f"New teacher registration code generated: {code}","success")
-    return redirect(url_for("college_admin_dashboard", section="teachers"))
-
-@app.route("/college-admin/teacher-code/<int:invite_id>/delete", methods=["POST"])
-@role_required("college_admin")
-def delete_teacher_code(invite_id):
-    # Only delete unused codes belonging to this college; never affect another college
-    # or a code that has already been used for a teacher registration.
-    invite = TeacherInvite.query.filter_by(
-        id=invite_id,
-        college_id=current_user.college_id,
-        used=False,
-    ).first_or_404()
-    db.session.delete(invite)
-    db.session.commit()
-    log("teacher_invite_deleted", f"invite_id={invite_id}")
-    flash("Unused teacher invitation code deleted.", "success")
-    return redirect(url_for("college_admin_dashboard", section="teachers"))
+    return redirect(url_for("college_admin_dashboard"))
 
 @app.route("/college-admin/roster-codes.csv")
 @role_required("college_admin")
