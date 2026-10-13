@@ -41,6 +41,7 @@ class User(UserMixin, db.Model):
     active = db.Column(db.Boolean, default=True)
     college_id = db.Column(db.Integer, db.ForeignKey("college.id"), index=True)
     account_status = db.Column(db.String(20), default="active", nullable=False)
+    unique_code = db.Column(db.String(32), unique=True, index=True)
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
     def check_password(self, password):
@@ -76,7 +77,15 @@ class StudentRoster(db.Model):
     year = db.Column(db.String(30), default="")
     division = db.Column(db.String(30), default="")
     claimed = db.Column(db.Boolean, default=False, nullable=False)
+    unique_code = db.Column(db.String(32), unique=True, index=True)
     __table_args__ = (db.UniqueConstraint("college_id", "student_id", name="uq_roster_college_student"), db.UniqueConstraint("college_id", "email", name="uq_roster_college_email"))
+
+class TeacherInvite(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    college_id = db.Column(db.Integer, db.ForeignKey("college.id"), nullable=False, index=True)
+    code = db.Column(db.String(32), unique=True, nullable=False, index=True)
+    used = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
 class EmailOTP(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -189,53 +198,27 @@ def find_session(token):
     except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
         return None
 
-def send_email(to_email, subject, body, reply_to=None):
-    """Send transactional email using environment-overridable SMTP settings."""
-    host = os.getenv("SMTP_HOST", getattr(info, "SMTP_HOST", ""))
-    user = os.getenv("SMTP_USER", getattr(info, "SMTP_USER", ""))
-    password = os.getenv("SMTP_PASSWORD", getattr(info, "SMTP_PASSWORD", ""))
-    sender = os.getenv("SMTP_FROM", getattr(info, "SMTP_FROM", user))
-    port = int(os.getenv("SMTP_PORT", str(getattr(info, "SMTP_PORT", 587))))
-    if not host or not sender or not to_email:
-        app.logger.error("Email not sent: SMTP_HOST, SMTP_FROM, and recipient are required")
+def send_otp_email(email, otp):
+    """SMTP is configured in info.py. If not configured, OTP is never exposed to the public response."""
+    host = getattr(info, "SMTP_HOST", "")
+    user = getattr(info, "SMTP_USER", "")
+    password = getattr(info, "SMTP_PASSWORD", "")
+    sender = getattr(info, "SMTP_FROM", user)
+    port = int(getattr(info, "SMTP_PORT", 587))
+    if not host or not sender:
+        app.logger.error("Email OTP cannot be delivered: configure SMTP_HOST/SMTP_FROM in info.py")
         return False
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = to_email
-    if reply_to:
-        msg["Reply-To"] = reply_to
-    msg.set_content(body)
+    msg = EmailMessage(); msg["Subject"] = "Your AttendX verification code"; msg["From"] = sender; msg["To"] = email
+    msg.set_content(f"Your AttendX verification code is {otp}. It expires in 10 minutes. If you did not request it, ignore this email.")
     try:
         with smtplib.SMTP(host, port, timeout=15) as server:
             server.starttls()
-            if user:
-                server.login(user, password)
+            if user: server.login(user, password)
             server.send_message(msg)
         return True
     except Exception:
-        app.logger.exception("Unable to send AttendX email to %s", to_email)
+        app.logger.exception("Unable to send AttendX OTP")
         return False
-
-
-def send_admin_notification(req):
-    admin_email = os.getenv("ADMIN_EMAIL", getattr(info, "ADMIN_EMAIL", "")).strip().lower()
-    if not admin_email:
-        app.logger.error("College request notification not sent: ADMIN_EMAIL is not configured")
-        return False
-    body = ("A new college registration request was submitted on AttendX.\n\n"
-            f"College: {req.college_name}\nContact: {req.contact_name}\n"
-            f"Official email: {req.official_email}\nAddress: {req.address}\n"
-            f"Submitted: {req.created_at}\n\n"
-            "Review this request in the AttendX Super Admin panel under College requests.\n"
-            "You can reply to this email to contact the configured sender inbox; replies are not processed inside AttendX.")
-    return send_email(admin_email, f"AttendX: new college request — {req.college_name}", body,
-                      reply_to=req.official_email)
-
-def send_otp_email(email, otp):
-    """Deliver signup verification OTP by SMTP."""
-    return send_email(email, "Your AttendX verification code",
-                      f"Your AttendX verification code is {otp}. It expires in 10 minutes. If you did not request it, ignore this email.")
 
 def otp_digest(email, purpose, otp):
     return hashlib.sha256(f"{app.config['SECRET_KEY']}:{email}:{purpose}:{otp}".encode()).hexdigest()
@@ -254,6 +237,13 @@ def generate_college_code():
         code = "ATX-" + secrets.token_hex(3).upper()
         if not College.query.filter_by(code=code).first(): return code
 
+def generate_unique_code(prefix):
+    for _ in range(100):
+        code = prefix + secrets.token_hex(3).upper()
+        if not User.query.filter_by(unique_code=code).first() and not StudentRoster.query.filter_by(unique_code=code).first() and not TeacherInvite.query.filter_by(code=code).first():
+            return code
+    raise RuntimeError("Could not generate a unique code")
+
 def college_from_code(code):
     return College.query.filter_by(code=code.strip().upper(), status="approved").first()
 
@@ -268,26 +258,20 @@ def inject_globals():
 def index():
     return render_template("index.html")
 
-@app.route("/create-account")
-def create_account_options():
-    """Let visitors choose the correct registration path instead of defaulting to students."""
-    return render_template("create_account.html")
-
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
         name=request.form.get("name", "").strip(); email=request.form.get("email", "").strip().lower()
-        password=request.form.get("password", ""); code=request.form.get("college_code", "").strip().upper()
+        password=request.form.get("password", ""); code=request.form.get("unique_code", "").strip().upper().replace("-", "")
         student_id=request.form.get("roll_no", "").strip(); department=request.form.get("department", "").strip(); year=request.form.get("year", "").strip()
-        college=college_from_code(code)
-        if not college or not name or not email or not student_id or len(password)<8:
-            flash("Enter a valid approved College Code, Student ID, name, email and password (8+ characters).", "error"); return redirect(url_for("signup"))
-        roster=StudentRoster.query.filter_by(college_id=college.id, student_id=student_id, email=email, claimed=False).first()
+        if not name or not email or not code or len(password)<8:
+            flash("Enter your unique student code, name, email and password (8+ characters).", "error"); return redirect(url_for("signup"))
+        roster=StudentRoster.query.filter_by(unique_code=code, email=email, claimed=False).first()
         if not roster or roster.name.casefold()!=name.casefold():
             flash("Student details do not match an unclaimed record uploaded by your college.", "error"); return redirect(url_for("signup"))
         if User.query.filter_by(email=email).first():
             flash("This email already has an account. Please log in.", "error"); return redirect(url_for("login"))
-        payload={"name":name,"email":email,"password_hash":generate_password_hash(password),"college_id":college.id,"roll_no":student_id,"department":roster.department or department,"year":roster.year or year,"roster_id":roster.id}
+        payload={"name":name,"email":email,"password_hash":generate_password_hash(password),"college_id":roster.college_id,"roll_no":roster.student_id,"department":roster.department or department,"year":roster.year or year,"roster_id":roster.id}
         if not issue_otp(email,"student_signup",payload):
             flash("Email verification could not be sent. Please try later; the college must configure SMTP in info.py.", "error"); return redirect(url_for("signup"))
         flash("A 6-digit verification code was sent to your registered email.", "success")
@@ -311,7 +295,7 @@ def verify_email():
             if User.query.filter_by(email=email).first(): record.used=True; db.session.commit(); flash("Account already exists. Please log in.","error"); return redirect(url_for("login"))
             roster=db.session.get(StudentRoster,int(payload["roster_id"]))
             if not roster or roster.claimed or roster.college_id!=payload["college_id"]: abort(400)
-            user=User(name=payload["name"],email=email,password_hash=payload["password_hash"],role="student",college_id=payload["college_id"],roll_no=payload["roll_no"],department=payload["department"],year=payload["year"],account_status="active")
+            user=User(name=payload["name"],email=email,password_hash=payload["password_hash"],role="student",college_id=payload["college_id"],roll_no=payload["roll_no"],department=payload["department"],year=payload["year"],account_status="active",unique_code=roster.unique_code)
             roster.claimed=True; db.session.add(user); record.used=True; db.session.commit(); login_user(user); log("student_verified_signup",email); return redirect(url_for("dashboard"))
         flash("Unsupported verification flow.","error"); return redirect(url_for("login"))
     return render_template("verify_email.html", email=email, purpose=purpose)
@@ -325,33 +309,16 @@ def college_register():
         if User.query.filter_by(email=email).first() or CollegeRequest.query.filter_by(official_email=email,status="pending").first() or College.query.filter_by(official_email=email).first():
             flash("A request or approved college already exists for this email.","error"); return redirect(url_for("college_register"))
         req=CollegeRequest(college_name=name,official_email=email,address=address,contact_name=contact,password_hash=generate_password_hash(password))
-        db.session.add(req)
-        db.session.commit()
-        # Request remains saved even if email delivery is temporarily unavailable.
-        if not send_admin_notification(req):
-            app.logger.warning("College request %s saved, but admin notification email failed", req.id)
-        return redirect(url_for("college_waiting", req_id=req.id, email=email))
+        db.session.add(req); db.session.commit(); flash("College request submitted. AttendX will review it before issuing a code.","success"); return redirect(url_for("login"))
     return render_template("college_register.html")
-
-@app.route("/college/waiting/<int:req_id>")
-def college_waiting(req_id):
-    email = request.args.get("email", "").strip().lower()
-    req = db.session.get(CollegeRequest, req_id)
-    if not req or not email or not secrets.compare_digest(req.official_email.lower(), email):
-        abort(404)
-    return render_template("college_waiting.html", college_request=req)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method=="POST":
         email=request.form.get("email","").strip().lower(); password=request.form.get("password","")
-        code=request.form.get("college_code","").strip().upper(); user=User.query.filter_by(email=email,active=True,account_status="active").first()
+        user=User.query.filter_by(email=email,active=True,account_status="active").first()
         if not user or not user.check_password(password):
             flash("Email or password is incorrect, or your account is not active.","error"); return redirect(url_for("login"))
-        if user.role in ("student","teacher","college_admin"):
-            college=College.query.filter_by(id=user.college_id,status="approved").first()
-            if not college or not secrets.compare_digest(college.code,code):
-                flash("Enter the approved College Code associated with this account.","error"); return redirect(url_for("login"))
         login_user(user); log("login",f"Logged in as {user.role}")
         token=request.form.get("scan_token","").strip()
         if user.role=="student" and token: return redirect(url_for("scan",token=token))
@@ -507,7 +474,7 @@ def student_lookup():
     q = request.args.get("q", "").strip()
     students = []
     if q:
-        query = User.query.filter_by(role="student", college_id=current_user.college_id, account_status="active").filter(or_(User.name.ilike(f"%{q}%"), User.email.ilike(f"%{q}%")))
+        query = User.query.filter_by(role="student", college_id=current_user.college_id, account_status="active").filter(or_(User.name.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"), User.unique_code.ilike(f"%{q}%")))
         if current_user.role == "teacher":
             subject_ids = [s.id for s in Subject.query.filter_by(teacher_id=current_user.id).all()]
             enrolled_ids = [e.student_id for e in Enrollment.query.filter(Enrollment.subject_id.in_(subject_ids)).all()] if subject_ids else []
@@ -589,32 +556,33 @@ def decide_college_request(req_id, decision):
     req=db.session.get(CollegeRequest,req_id)
     if not req or req.status!="pending": abort(404)
     req.status="approved" if decision=="approve" else "rejected"; req.reviewed_at=utcnow()
-    college = None
     if decision=="approve":
         college=College(name=req.college_name,official_email=req.official_email,address=req.address,code=generate_college_code(),status="approved")
         db.session.add(college); db.session.flush()
         admin=User(name=req.contact_name,email=req.official_email,password_hash=req.password_hash,role="college_admin",college_id=college.id,account_status="active")
         db.session.add(admin)
     db.session.commit(); log("college_request_"+decision, f"request={req_id}")
-    if decision == "approve" and college:
-        body = (f"Hello {req.contact_name},\n\nYour AttendX college registration has been approved.\n\n"
-                f"College: {college.name}\nCollege Code: {college.code}\nLogin email: {req.official_email}\n\n"
-                "Use your chosen password and this College Code to sign in. Keep the code private and share it only with authorized users.")
-        sent = send_email(req.official_email, "AttendX college registration approved", body,
-                          reply_to=os.getenv("ADMIN_EMAIL", getattr(info, "ADMIN_EMAIL", "")))
-        flash("College approved and code generated." + (" Approval email sent." if sent else " WARNING: approval email failed; copy the code from this panel and check SMTP logs."), "success" if sent else "error")
-    elif decision == "reject":
-        send_email(req.official_email, "AttendX college registration update",
-                   f"Hello {req.contact_name},\n\nThank you for registering {req.college_name} with AttendX. Unfortunately, your request was not approved at this time. You may contact the AttendX administrator for clarification.",
-                   reply_to=os.getenv("ADMIN_EMAIL", getattr(info, "ADMIN_EMAIL", "")))
-        flash("College request rejected and notification attempted.","success")
+    flash("College approved and code generated." if decision=="approve" else "College request rejected.","success")
     return redirect(url_for("college_requests"))
 
 @app.route("/college-admin")
 @role_required("college_admin")
 def college_admin_dashboard():
     college= db.session.get(College,current_user.college_id)
-    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name.asc()).limit(300).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name.asc()).limit(200).all())
+    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(300).all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id,used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="active").order_by(User.name).all())
+
+@app.route("/college-admin/subjects", methods=["POST"])
+@role_required("college_admin")
+def college_add_subject():
+    name=request.form.get("name","").strip(); code=request.form.get("code","").strip().upper(); teacher_id=request.form.get("teacher_id",type=int)
+    teacher=User.query.filter_by(id=teacher_id,college_id=current_user.college_id,role="teacher",account_status="active").first() if teacher_id else None
+    if not name or not code or not teacher:
+        flash("Enter a subject name, subject code and choose an approved teacher.","error")
+    elif Subject.query.filter_by(college_id=current_user.college_id,code=code).first():
+        flash("That subject code already exists in your college.","error")
+    else:
+        db.session.add(Subject(name=name,code=code,teacher_id=teacher.id,college_id=current_user.college_id)); db.session.commit(); log("college_subject_created",f"{code}: {name}"); flash("Subject added and assigned to teacher.","success")
+    return redirect(url_for("college_admin_dashboard"))
 
 @app.route("/college-admin/roster-upload", methods=["POST"])
 @role_required("college_admin")
@@ -632,7 +600,7 @@ def upload_roster():
             if not sid or not name or not email: continue
             old=StudentRoster.query.filter_by(college_id=current_user.college_id,student_id=sid).first()
             if old: continue
-            db.session.add(StudentRoster(college_id=current_user.college_id,student_id=sid,name=name,email=email,department=(row.get("department") or "").strip(),year=(row.get("year") or "").strip(),division=(row.get("division") or "").strip())); count+=1
+            db.session.add(StudentRoster(college_id=current_user.college_id,student_id=sid,name=name,email=email,department=(row.get("department") or "").strip(),year=(row.get("year") or "").strip(),division=(row.get("division") or "").strip(),unique_code=generate_unique_code("STU"))); count+=1
         db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
@@ -648,24 +616,39 @@ def decide_teacher(user_id, decision):
 @app.route("/teacher/signup", methods=["GET","POST"])
 def teacher_signup():
     if request.method=="POST":
-        name=request.form.get("name","").strip(); email=request.form.get("email","").strip().lower(); password=request.form.get("password",""); code=request.form.get("college_code","").strip().upper()
-        college=college_from_code(code)
-        if not college or not name or not email or len(password)<8: flash("Enter valid details and an approved College Code.","error"); return redirect(url_for("teacher_signup"))
+        name=request.form.get("name","").strip(); email=request.form.get("email","").strip().lower(); password=request.form.get("password",""); code=request.form.get("unique_code","").strip().upper()
+        invite=TeacherInvite.query.filter_by(code=code,used=False).first()
+        college=db.session.get(College,invite.college_id) if invite else None
+        if not invite or not college or college.status!="approved" or not name or not email or len(password)<8:
+            flash("Enter a valid teacher invitation code and complete all details.","error"); return redirect(url_for("teacher_signup"))
         if User.query.filter_by(email=email).first(): flash("This email is already registered.","error"); return redirect(url_for("login"))
-        teacher=User(name=name,email=email,role="teacher",college_id=college.id,account_status="pending",active=False); teacher.set_password(password); db.session.add(teacher); db.session.commit(); log("teacher_signup_pending",email); flash("Teacher request submitted. Your college admin must approve it before login.","success"); return redirect(url_for("login"))
+        teacher=User(name=name,email=email,role="teacher",college_id=college.id,account_status="pending",active=False,unique_code=invite.code); teacher.set_password(password); invite.used=True; db.session.add(teacher); db.session.commit(); log("teacher_signup_pending",email); flash("Teacher registration successful. Your college admin must approve your account before login.","success"); return redirect(url_for("login"))
     return render_template("teacher_signup.html")
+
+@app.route("/college-admin/teacher-code", methods=["POST"])
+@role_required("college_admin")
+def generate_teacher_code():
+    code=generate_unique_code("TCH")
+    db.session.add(TeacherInvite(college_id=current_user.college_id,code=code)); db.session.commit()
+    flash(f"New teacher registration code generated: {code}","success")
+    return redirect(url_for("college_admin_dashboard"))
+
+@app.route("/college-admin/roster-codes.csv")
+@role_required("college_admin")
+def export_roster_codes():
+    output=io.StringIO(); writer=csv.writer(output)
+    writer.writerow(["student_id","name","email","unique_code","department","year","division","claimed"])
+    rows=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).all()
+    for r in rows: writer.writerow([r.student_id,r.name,r.email,r.unique_code or "",r.department,r.year,r.division,"yes" if r.claimed else "no"])
+    data=io.BytesIO(output.getvalue().encode("utf-8-sig"))
+    return send_file(data,mimetype="text/csv",as_attachment=True,download_name="attendx-student-codes.csv")
 
 @app.route("/admin")
 @role_required("admin")
 def admin_dashboard():
     return render_template("admin.html", users=User.query.order_by(User.created_at.desc()).limit(100).all(),
                            subjects=Subject.query.order_by(Subject.id.desc()).limit(100).all(),
-                           logs=AuditLog.query.order_by(AuditLog.created_at.desc()).limit(100).all(),
-                           colleges=College.query.order_by(College.created_at.desc()).all(),
-                           pending_requests=CollegeRequest.query.filter_by(status="pending").count(),
-                           college_count=College.query.count(),
-                           teacher_count=User.query.filter_by(role="teacher").count(),
-                           student_count=User.query.filter_by(role="student").count())
+                           logs=AuditLog.query.order_by(AuditLog.created_at.desc()).limit(100).all())
 
 @app.route("/admin/create-user", methods=["POST"])
 @role_required("admin")
@@ -679,7 +662,7 @@ def admin_create_user():
     elif User.query.filter_by(email=email).first():
         flash("That email is already registered.", "error")
     else:
-        user = User(name=name, email=email, role=role)
+        user = User(name=name, email=email, role=role, unique_code=generate_unique_code("TCH" if role == "teacher" else "STU") if role in ("teacher", "student") else None)
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
@@ -712,47 +695,29 @@ def not_found(e):
 def bootstrap():
     with app.app_context():
         db.create_all()
-        # Lightweight compatibility migration for databases created before
-        # the multi-college fields were added to the User model.
-        # PostgreSQL is used on Heroku; SQLite is supported for local runs.
-        if db.engine.dialect.name == "postgresql":
-            with db.engine.begin() as conn:
-                conn.exec_driver_sql(
-                    'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS college_id INTEGER'
-                )
-                conn.exec_driver_sql(
-                    "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL DEFAULT 'active'"
-                )
-                # Compatibility migration: older deployments may have a subject
-                # table without the multi-college college_id field. Preserve
-                # existing records and infer college_id from each subject's teacher.
-                conn.exec_driver_sql(
-                    "ALTER TABLE subject ADD COLUMN IF NOT EXISTS college_id INTEGER"
-                )
-                conn.exec_driver_sql(
-                    "UPDATE subject AS s SET college_id = u.college_id "
-                    "FROM \"user\" AS u "
-                    "WHERE s.teacher_id = u.id AND s.college_id IS NULL"
-                )
-                conn.exec_driver_sql(
-                    "CREATE INDEX IF NOT EXISTS ix_subject_college_id ON subject (college_id)"
-                )
-        elif db.engine.dialect.name == "sqlite":
-            from sqlalchemy import inspect
-            columns = {column["name"] for column in inspect(db.engine).get_columns("user")}
-            with db.engine.begin() as conn:
-                if "college_id" not in columns:
-                    conn.exec_driver_sql('ALTER TABLE "user" ADD COLUMN college_id INTEGER')
-                if "account_status" not in columns:
-                    conn.exec_driver_sql(
-                        "ALTER TABLE \"user\" ADD COLUMN account_status VARCHAR(20) NOT NULL DEFAULT 'active'"
-                    )
-                subject_columns = {column["name"] for column in inspect(db.engine).get_columns("subject")}
-                if "college_id" not in subject_columns:
-                    conn.exec_driver_sql("ALTER TABLE subject ADD COLUMN college_id INTEGER")
-                conn.exec_driver_sql(
-                    'UPDATE subject SET college_id = (SELECT college_id FROM "user" WHERE "user".id = subject.teacher_id) WHERE college_id IS NULL'
-                )
+        # Lightweight additive migration for existing SQLite/Postgres databases.
+        from sqlalchemy import text, inspect
+        inspector = inspect(db.engine)
+        for table_name, column_name, ddl in [
+            ("user", "unique_code", "VARCHAR(32)"),
+            ("student_roster", "unique_code", "VARCHAR(32)"),
+        ]:
+            if table_name in inspector.get_table_names() and column_name not in [c["name"] for c in inspector.get_columns(table_name)]:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
+        db.session.commit()
+        # Backfill unique codes for records created before this update.
+        for roster_row in StudentRoster.query.filter(StudentRoster.unique_code.is_(None)).all():
+            roster_row.unique_code = generate_unique_code("STU")
+        for account in User.query.filter(User.unique_code.is_(None), User.role.in_(["student", "teacher"])).all():
+            account.unique_code = generate_unique_code("STU" if account.role == "student" else "TCH")
+        # Normalize existing student/teacher codes to the no-hyphen format.
+        for roster_row in StudentRoster.query.filter(StudentRoster.unique_code.isnot(None)).all():
+            roster_row.unique_code = roster_row.unique_code.replace("STU-", "STU").replace("TCH-", "TCH")
+        for account in User.query.filter(User.unique_code.isnot(None)).all():
+            account.unique_code = account.unique_code.replace("STU-", "STU").replace("TCH-", "TCH")
+        for invite in TeacherInvite.query.all():
+            invite.code = invite.code.replace("STU-", "STU").replace("TCH-", "TCH")
+        db.session.commit()
         admin_email = os.getenv("ADMIN_EMAIL", info.ADMIN_EMAIL).strip().lower()
         admin_password = os.getenv("ADMIN_PASSWORD", info.ADMIN_PASSWORD)
         if admin_password.startswith("CHANGE-ME") or app.config["SECRET_KEY"].startswith("CHANGE-ME"):
@@ -767,4 +732,3 @@ bootstrap()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", str(info.PORT))), debug=os.getenv("FLASK_DEBUG", "1" if info.FLASK_DEBUG else "0") == "1")
-

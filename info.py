@@ -5,17 +5,17 @@ can be configured in the hosting dashboard instead of committed to source contro
 """
 
 # Generate a long random value before deploying. Keep this value private.
-SECRET_KEY = "shiv"
+SECRET_KEY = "CHANGE-ME-to-a-long-random-secret-before-use"
 
 # Local testing uses SQLite. For hosting, set DATABASE_URL to your PostgreSQL URL.
-DATABASE_URL = "postgresql://neondb_owner:npg_zpfEPnlk5N2y@ep-nameless-sunset-azpqdzr2-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+DATABASE_URL = "sqlite:///attendx.db"
 
 # Optional initial admin account. Set both fields to create the admin on first run.
-ADMIN_EMAIL = "shivamnavinmishra5678@gmail.com"
-ADMIN_PASSWORD = "shiv"
+ADMIN_EMAIL = "admin@example.edu"
+ADMIN_PASSWORD = "CHANGE-ME-to-a-strong-admin-password"
 
 # Set True when deployed behind HTTPS; keep False for localhost.
-COOKIE_SECURE = True
+COOKIE_SECURE = False
 
 # Development only: keep False unless debugging locally.
 FLASK_DEBUG = False
@@ -24,8 +24,8 @@ FLASK_DEBUG = False
 PORT = 5000
 
 # SMTP is required for student email OTP. Configure these values for real delivery.
-SMTP_HOST = "smtp.gmail.com"
+SMTP_HOST = ""
 SMTP_PORT = 587
-SMTP_USER = "shivamnavinmishra5678@gmail.com"
-SMTP_PASSWORD = "roft ppgu fdfi vkqj"
-SMTP_FROM = "shivamnavinmishra5678@gmail.com"
+SMTP_USER = ""
+SMTP_PASSWORD = ""
+SMTP_FROM = ""
