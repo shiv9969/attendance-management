@@ -24,8 +24,8 @@ FLASK_DEBUG = False
 PORT = 5000
 
 # SMTP is required for student email OTP. Configure these values for real delivery.
-SMTP_HOST = ""
+SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = ""
-SMTP_PASSWORD = ""
-SMTP_FROM = ""
+SMTP_USER = "shivamnavinmishra5678@gmail.com"
+SMTP_PASSWORD = "roft ppgu fdfi vkqj"
+SMTP_FROM = "shivamnavinmishra5678@gmail.com"
