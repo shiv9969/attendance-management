@@ -609,7 +609,7 @@ def decide_college_request(req_id, decision):
 @role_required("college_admin")
 def college_admin_dashboard():
     college= db.session.get(College,current_user.college_id)
-    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count())
+    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name.asc()).limit(300).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name.asc()).limit(200).all())
 
 @app.route("/college-admin/roster-upload", methods=["POST"])
 @role_required("college_admin")
@@ -655,7 +655,12 @@ def teacher_signup():
 def admin_dashboard():
     return render_template("admin.html", users=User.query.order_by(User.created_at.desc()).limit(100).all(),
                            subjects=Subject.query.order_by(Subject.id.desc()).limit(100).all(),
-                           logs=AuditLog.query.order_by(AuditLog.created_at.desc()).limit(100).all())
+                           logs=AuditLog.query.order_by(AuditLog.created_at.desc()).limit(100).all(),
+                           colleges=College.query.order_by(College.created_at.desc()).all(),
+                           pending_requests=CollegeRequest.query.filter_by(status="pending").count(),
+                           college_count=College.query.count(),
+                           teacher_count=User.query.filter_by(role="teacher").count(),
+                           student_count=User.query.filter_by(role="student").count())
 
 @app.route("/admin/create-user", methods=["POST"])
 @role_required("admin")
