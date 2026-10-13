@@ -268,6 +268,11 @@ def inject_globals():
 def index():
     return render_template("index.html")
 
+@app.route("/create-account")
+def create_account_options():
+    """Let visitors choose the correct registration path instead of defaulting to students."""
+    return render_template("create_account.html")
+
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
