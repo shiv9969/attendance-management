@@ -201,6 +201,32 @@ def find_session(token):
     except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
         return None
 
+def send_student_code_email(email, name, unique_code):
+    """Email a newly assigned student registration code using info.py SMTP settings."""
+    host = getattr(info, "SMTP_HOST", "")
+    user = getattr(info, "SMTP_USER", "")
+    password = getattr(info, "SMTP_PASSWORD", "")
+    sender = getattr(info, "SMTP_FROM", user)
+    port = int(getattr(info, "SMTP_PORT", 587))
+    if not host or not sender:
+        app.logger.error("Student code email not sent: SMTP_HOST/SMTP_FROM missing")
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = "Your AttendX student registration code"
+    msg["From"] = sender
+    msg["To"] = email
+    msg.set_content(f"Hello {name},\n\nYour student record has been created in AttendX.\n\nYour unique registration code is: {unique_code}\n\nKeep this code safe and use it when registering your AttendX student account. If you did not expect this email, contact your college administrator.\n")
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls()
+            if user:
+                server.login(user, password)
+            server.send_message(msg)
+        return True
+    except Exception:
+        app.logger.exception("Unable to send student registration code email to %s", email)
+        return False
+
 def send_otp_email(email, otp):
     """SMTP is configured in info.py. If not configured, OTP is never exposed to the public response."""
     host = getattr(info, "SMTP_HOST", "")
@@ -634,6 +660,31 @@ def college_admin_dashboard():
     college= db.session.get(College,current_user.college_id)
     return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(300).all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id,used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="active").order_by(User.name).all())
 
+@app.route("/college-admin/teachers")
+@role_required("college_admin")
+def college_teachers_page():
+    return render_template("college_teachers.html", teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher").order_by(User.created_at.desc()).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher", account_status="pending").all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id, used=False).order_by(TeacherInvite.created_at.desc()).all())
+
+@app.route("/college-admin/subjects")
+@role_required("college_admin")
+def college_subjects_page():
+    return render_template("college_subjects.html", subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher", account_status="active").order_by(User.name).all())
+
+@app.route("/college-admin/timetable")
+@role_required("college_admin")
+def college_timetable_page():
+    return render_template("college_timetable.html")
+
+@app.route("/college-admin/reports")
+@role_required("college_admin")
+def college_reports_page():
+    return render_template("college_reports.html", roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher").count(), subjects=Subject.query.filter_by(college_id=current_user.college_id).count(), college= db.session.get(College,current_user.college_id))
+
+@app.route("/college-admin/settings")
+@role_required("college_admin")
+def college_settings_page():
+    return render_template("college_settings.html", college=db.session.get(College,current_user.college_id))
+
 @app.route("/college-admin/subjects", methods=["POST"])
 @role_required("college_admin")
 def college_add_subject():
@@ -684,7 +735,10 @@ def add_roster_student():
         db.session.add(student)
         db.session.commit()
         log("roster_student_added", f"{sid}: {email}")
-        flash(f"Student {name} added successfully. A unique registration code was generated.", "success")
+        if send_student_code_email(student.email, student.name, student.unique_code):
+            flash(f"Student {name} added. Unique code was emailed to {email}.", "success")
+        else:
+            flash(f"Student {name} was added and code generated, but email could not be sent. Check SMTP settings/logs.", "error")
     except IntegrityError:
         db.session.rollback()
         flash("Could not add this student because the Student ID or email already exists.", "error")
@@ -716,13 +770,20 @@ def upload_roster():
         required={"student_id","name","email"}
         if not required.issubset(set(rows.fieldnames or [])): raise ValueError("Missing required columns")
         count=0
+        added_students=[]
         for row in rows:
             sid=(row.get("student_id") or "").strip(); name=(row.get("name") or "").strip(); email=(row.get("email") or "").strip().lower()
             if not sid or not name or not email: continue
             old=StudentRoster.query.filter_by(college_id=current_user.college_id,student_id=sid).first()
             if old: continue
-            db.session.add(StudentRoster(college_id=current_user.college_id,student_id=sid,name=name,email=email,department=(row.get("department") or "").strip(),year=(row.get("year") or "").strip(),division=(row.get("division") or "").strip(),unique_code=generate_unique_code("STU"))); count+=1
-        db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
+            student=StudentRoster(college_id=current_user.college_id,student_id=sid,name=name,email=email,department=(row.get("department") or "").strip(),year=(row.get("year") or "").strip(),division=(row.get("division") or "").strip(),unique_code=generate_unique_code("STU"))
+            db.session.add(student); added_students.append(student); count+=1
+        db.session.commit()
+        sent=sum(1 for student in added_students if send_student_code_email(student.email, student.name, student.unique_code))
+        log("roster_uploaded",f"{count} records; {sent} code emails sent")
+        if count and sent == count: flash(f"Imported {count} students; unique codes emailed successfully.","success")
+        elif count: flash(f"Imported {count} students; emails sent to {sent}. Check SMTP settings/logs for failures.","error")
+        else: flash("No new student records were imported.","success")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
     return redirect(url_for("college_admin_dashboard"))
