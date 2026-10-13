@@ -1,4 +1,3 @@
-
 import os, io, csv, secrets, hashlib, smtplib, time
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
@@ -319,16 +318,15 @@ def login():
     if request.method=="POST":
         email=request.form.get("email","").strip().lower(); password=request.form.get("password","")
         user=User.query.filter_by(email=email).first()
-        if not user or not user.check_password(password):
-            flash("Email or password is incorrect.","error"); return redirect(url_for("login"))
+        if user is None:
+            app.logger.warning("Login rejected: no account for submitted email")
+            flash("Email or password is incorrect, or your account is not active.","error"); return redirect(url_for("login"))
         if not user.active or user.account_status != "active":
-            if user.role == "college_admin":
-                flash("College account is not active. Contact AttendX Super Admin to approve the college.","error")
-            elif user.role == "teacher":
-                flash("Teacher account is awaiting college-admin approval or is inactive.","error")
-            else:
-                flash("This account is inactive. Contact your administrator.","error")
-            return redirect(url_for("login"))
+            app.logger.warning("Login rejected: account inactive (role=%s, status=%s)", user.role, user.account_status)
+            flash("Your account is not active yet. College registrations and teacher accounts may need approval.","error"); return redirect(url_for("login"))
+        if not user.check_password(password):
+            app.logger.warning("Login rejected: password mismatch (role=%s)", user.role)
+            flash("Email or password is incorrect, or your account is not active.","error"); return redirect(url_for("login"))
         login_user(user); log("login",f"Logged in as {user.role}")
         token=request.form.get("scan_token","").strip()
         if user.role=="student" and token: return redirect(url_for("scan",token=token))
@@ -736,35 +734,31 @@ def bootstrap():
             admin_password = os.getenv("ADMIN_PASSWORD", info.ADMIN_PASSWORD)
             if admin_password.startswith("CHANGE-ME") or app.config["SECRET_KEY"].startswith("CHANGE-ME"):
                 print("WARNING: Edit info.py and replace the CHANGE-ME values before using this app beyond local testing.")
-            # Ensure the configured super-admin can recover from a stale password.
-            # Only synchronize an existing account if it is already an admin; never
-            # silently elevate a student/teacher/college account to admin.
+            # Multiple Gunicorn workers can run bootstrap() simultaneously.
+            # Re-check and gracefully handle the unique-email race instead of
+            # crashing a worker when another worker creates the admin first.
+            # Keep the configured super-admin account usable after credentials are
+            # changed in the hosting dashboard. Never sync the placeholder password.
             if admin_email and admin_password and not admin_password.startswith("CHANGE-ME"):
-                configured_admin = User.query.filter_by(email=admin_email).first()
-                if configured_admin is None:
+                admin = User.query.filter_by(email=admin_email).first()
+                if admin is None:
                     try:
-                        configured_admin = User(
-                            name="System Admin", email=admin_email, role="admin",
-                            active=True, account_status="active"
-                        )
-                        configured_admin.set_password(admin_password)
-                        db.session.add(configured_admin)
+                        admin = User(name="System Admin", email=admin_email, role="admin")
+                        admin.set_password(admin_password)
+                        db.session.add(admin)
                         db.session.commit()
                     except IntegrityError:
                         db.session.rollback()
-                        configured_admin = User.query.filter_by(email=admin_email).first()
-                        if configured_admin is None:
+                        admin = User.query.filter_by(email=admin_email).first()
+                        if admin is None:
                             raise
-                elif configured_admin.role == "admin":
-                    configured_admin.set_password(admin_password)
-                    configured_admin.active = True
-                    configured_admin.account_status = "active"
+                # Only update a matching admin account, never convert a college or
+                # student account into an administrator because of an email collision.
+                if admin.role == "admin":
+                    admin.set_password(admin_password)
+                    admin.active = True
+                    admin.account_status = "active"
                     db.session.commit()
-                else:
-                    app.logger.error(
-                        "ADMIN_EMAIL matches an existing non-admin account; "
-                        "change ADMIN_EMAIL to a dedicated super-admin email."
-                    )
     finally:
         if fcntl is not None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
