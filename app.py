@@ -81,6 +81,7 @@ class StudentRoster(db.Model):
     division = db.Column(db.String(30), default="")
     claimed = db.Column(db.Boolean, default=False, nullable=False)
     unique_code = db.Column(db.String(32), unique=True, index=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
     __table_args__ = (db.UniqueConstraint("college_id", "student_id", name="uq_roster_college_student"), db.UniqueConstraint("college_id", "email", name="uq_roster_college_email"))
 
 class TeacherInvite(db.Model):
@@ -223,6 +224,39 @@ def send_otp_email(email, otp):
         app.logger.exception("Unable to send AttendX OTP")
         return False
 
+def send_student_registration_email(student):
+    """Email the student's code and registration link; code expires after seven days."""
+    host = getattr(info, "SMTP_HOST", "")
+    user = getattr(info, "SMTP_USER", "")
+    password = getattr(info, "SMTP_PASSWORD", "")
+    sender = getattr(info, "SMTP_FROM", user)
+    port = int(getattr(info, "SMTP_PORT", 587))
+    if not host or not sender:
+        app.logger.error("Student invite email cannot be delivered: configure SMTP_HOST/SMTP_FROM in info.py")
+        return False
+    link = url_for("signup", _external=True)
+    expiry = student.expires_at.strftime("%d %b %Y, %I:%M %p UTC") if student.expires_at else "7 days from issue"
+    msg = EmailMessage()
+    msg["Subject"] = "Your AttendX student registration code"
+    msg["From"] = sender
+    msg["To"] = student.email
+    msg.set_content(
+        f"Hello {student.name},\\n\\nYour college has added you to AttendX.\\n"
+        f"Registration code: {student.unique_code}\\nRegistration page: {link}\\n"
+        f"Use the code with your registered email and name. This code expires: {expiry}.\\n\\n"
+        "If you did not expect this email, please contact your college administrator."
+    )
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls()
+            if user:
+                server.login(user, password)
+            server.send_message(msg)
+        return True
+    except Exception:
+        app.logger.exception("Unable to send student registration email")
+        return False
+
 def otp_digest(email, purpose, otp):
     return hashlib.sha256(f"{app.config['SECRET_KEY']}:{email}:{purpose}:{otp}".encode()).hexdigest()
 
@@ -274,7 +308,7 @@ def signup():
         if not name or not email or not code or len(password)<8:
             flash("Enter your unique student code, name, email and password (8+ characters).", "error"); return redirect(url_for("signup"))
         roster=StudentRoster.query.filter_by(unique_code=code, email=email, claimed=False).first()
-        if not roster or roster.name.casefold()!=name.casefold():
+        if not roster or roster.name.casefold()!=name.casefold() or (roster.expires_at and roster.expires_at < utcnow()):
             flash("Student details do not match an unclaimed record uploaded by your college.", "error"); return redirect(url_for("signup"))
         if User.query.filter_by(email=email).first():
             flash("This email already has an account. Please log in.", "error"); return redirect(url_for("login"))
@@ -631,8 +665,27 @@ def decide_college_request(req_id, decision):
 @app.route("/college-admin")
 @role_required("college_admin")
 def college_admin_dashboard():
-    college= db.session.get(College,current_user.college_id)
-    return render_template("college_admin.html", college=college, users=User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all(), pending_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="pending").all(), roster_count=StudentRoster.query.filter_by(college_id=current_user.college_id).count(), roster=StudentRoster.query.filter_by(college_id=current_user.college_id).order_by(StudentRoster.name).limit(300).all(), teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id,used=False).order_by(TeacherInvite.created_at.desc()).all(), subjects=Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all(), approved_teachers=User.query.filter_by(college_id=current_user.college_id,role="teacher",account_status="active").order_by(User.name).all())
+    college = db.session.get(College, current_user.college_id)
+    section = request.args.get("section", "overview")
+    users = User.query.filter_by(college_id=current_user.college_id).order_by(User.created_at.desc()).limit(200).all()
+    roster_query = StudentRoster.query.filter_by(college_id=current_user.college_id)
+    subjects = Subject.query.filter_by(college_id=current_user.college_id).order_by(Subject.name).all()
+    teachers = User.query.filter_by(college_id=current_user.college_id, role="teacher").order_by(User.name).all()
+    common = dict(college=college, users=users,
+        pending_teachers=[u for u in users if u.role == "teacher" and u.account_status == "pending"],
+        roster_count=roster_query.count(),
+        roster=roster_query.order_by(StudentRoster.name).limit(500).all(),
+        teacher_codes=TeacherInvite.query.filter_by(college_id=current_user.college_id, used=False).order_by(TeacherInvite.created_at.desc()).all(),
+        subjects=subjects,
+        approved_teachers=User.query.filter_by(college_id=current_user.college_id, role="teacher", account_status="active").order_by(User.name).all(),
+        teachers=teachers)
+    pages = {"overview": "college_admin.html", "students": "college_students.html",
+        "teachers": "college_teachers.html", "subjects": "college_subjects.html",
+        "timetable": "college_timetable.html", "reports": "college_reports.html",
+        "settings": "college_settings.html"}
+    if section not in pages:
+        abort(404)
+    return render_template(pages[section], **common)
 
 @app.route("/college-admin/subjects", methods=["POST"])
 @role_required("college_admin")
@@ -646,6 +699,49 @@ def college_add_subject():
     else:
         db.session.add(Subject(name=name,code=code,teacher_id=teacher.id,college_id=current_user.college_id)); db.session.commit(); log("college_subject_created",f"{code}: {name}"); flash("Subject added and assigned to teacher.","success")
     return redirect(url_for("college_admin_dashboard"))
+
+@app.route("/college-admin/subject/<int:subject_id>/edit", methods=["POST"])
+@role_required("college_admin")
+def edit_college_subject(subject_id):
+    subject = Subject.query.filter_by(id=subject_id, college_id=current_user.college_id).first_or_404()
+    name = request.form.get("name", "").strip()
+    code = request.form.get("code", "").strip().upper()
+    teacher_id = request.form.get("teacher_id", type=int)
+    teacher = User.query.filter_by(id=teacher_id, college_id=current_user.college_id, role="teacher", account_status="active").first() if teacher_id else None
+    duplicate = Subject.query.filter(Subject.college_id == current_user.college_id, Subject.code == code, Subject.id != subject.id).first()
+    if not name or not code or not teacher:
+        flash("Enter subject name/code and choose an approved teacher.", "error")
+    elif duplicate:
+        flash("That subject code already exists in your college.", "error")
+    else:
+        subject.name, subject.code, subject.teacher_id = name, code, teacher.id
+        db.session.commit()
+        log("college_subject_updated", f"{code}: {name}")
+        flash("Subject updated.", "success")
+    return redirect(url_for("college_admin_dashboard", section="subjects"))
+
+@app.route("/college-admin/subject/<int:subject_id>/delete", methods=["POST"])
+@role_required("college_admin")
+def delete_college_subject(subject_id):
+    subject = Subject.query.filter_by(id=subject_id, college_id=current_user.college_id).first_or_404()
+    if subject.enrollments:
+        flash("This subject has enrollments and cannot be deleted until those are handled.", "error")
+    else:
+        name = subject.name
+        db.session.delete(subject)
+        db.session.commit()
+        log("college_subject_deleted", name)
+        flash("Subject deleted.", "success")
+    return redirect(url_for("college_admin_dashboard", section="subjects"))
+
+@app.route("/college-admin/teacher-code/<int:invite_id>/delete", methods=["POST"])
+@role_required("college_admin")
+def delete_teacher_code(invite_id):
+    invite = TeacherInvite.query.filter_by(id=invite_id, college_id=current_user.college_id, used=False).first_or_404()
+    db.session.delete(invite)
+    db.session.commit()
+    flash("Unused teacher invitation code deleted.", "success")
+    return redirect(url_for("college_admin_dashboard", section="teachers"))
 
 @app.route("/college-admin/roster-add", methods=["POST"])
 @role_required("college_admin")
@@ -680,11 +776,16 @@ def add_roster_student():
             year=year,
             division=division,
             unique_code=generate_unique_code("STU"),
+            expires_at=utcnow() + timedelta(days=7),
         )
         db.session.add(student)
         db.session.commit()
+        email_sent = send_student_registration_email(student)
         log("roster_student_added", f"{sid}: {email}")
-        flash(f"Student {name} added successfully. A unique registration code was generated.", "success")
+        if email_sent:
+            flash(f"Student {name} added. Registration code and link emailed; code expires in 7 days.", "success")
+        else:
+            flash(f"Student {name} added and code generated, but email failed. Check SMTP settings and resend manually.", "warning")
     except IntegrityError:
         db.session.rollback()
         flash("Could not add this student because the Student ID or email already exists.", "error")
@@ -715,14 +816,24 @@ def upload_roster():
         rows=csv.DictReader(io.StringIO(f.stream.read().decode("utf-8-sig")))
         required={"student_id","name","email"}
         if not required.issubset(set(rows.fieldnames or [])): raise ValueError("Missing required columns")
-        count=0
+        created=[]
         for row in rows:
             sid=(row.get("student_id") or "").strip(); name=(row.get("name") or "").strip(); email=(row.get("email") or "").strip().lower()
-            if not sid or not name or not email: continue
+            if not sid or not name or not email or "@" not in email: continue
             old=StudentRoster.query.filter_by(college_id=current_user.college_id,student_id=sid).first()
-            if old: continue
-            db.session.add(StudentRoster(college_id=current_user.college_id,student_id=sid,name=name,email=email,department=(row.get("department") or "").strip(),year=(row.get("year") or "").strip(),division=(row.get("division") or "").strip(),unique_code=generate_unique_code("STU"))); count+=1
-        db.session.commit(); log("roster_uploaded",f"{count} records"); flash(f"Imported {count} student records.","success")
+            old_email=StudentRoster.query.filter_by(college_id=current_user.college_id,email=email).first()
+            if old or old_email: continue
+            student=StudentRoster(college_id=current_user.college_id,student_id=sid,name=name,email=email,department=(row.get("department") or "").strip(),year=(row.get("year") or "").strip(),division=(row.get("division") or "").strip(),unique_code=generate_unique_code("STU"),expires_at=utcnow()+timedelta(days=7))
+            db.session.add(student); created.append(student)
+        db.session.commit()
+        sent=sum(1 for student in created if send_student_registration_email(student))
+        log("roster_uploaded",f"{len(created)} records")
+        if created and sent == len(created):
+            flash(f"Imported {len(created)} students; registration emails sent. Codes expire in 7 days.","success")
+        elif created:
+            flash(f"Imported {len(created)} students; {sent} emails sent and {len(created)-sent} failed. Check SMTP settings.","warning")
+        else:
+            flash("No new students imported. Check duplicates and required values.","warning")
     except Exception:
         db.session.rollback(); flash("CSV could not be imported. Check UTF-8 encoding and required columns.","error")
     return redirect(url_for("college_admin_dashboard"))
@@ -833,6 +944,7 @@ def bootstrap():
             for table_name, column_name, ddl in [
                 ("user", "unique_code", "VARCHAR(32)"),
                 ("student_roster", "unique_code", "VARCHAR(32)"),
+                ("student_roster", "expires_at", "TIMESTAMP"),
             ]:
                 if table_name in inspector.get_table_names() and column_name not in [c["name"] for c in inspector.get_columns(table_name)]:
                     # Quote identifiers for PostgreSQL: `user` is a reserved keyword.
